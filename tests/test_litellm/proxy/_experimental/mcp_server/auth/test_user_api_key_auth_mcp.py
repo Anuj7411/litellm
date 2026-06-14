@@ -804,6 +804,141 @@ class TestMCPOAuth2AuthFlow:
         mock_auth.assert_called_once()
         assert auth_result.user_id == "test-user"
 
+    async def test_jwt_on_oauth2_target_validated_when_jwt_auth_enabled(self):
+        """
+        Regression: when JWT auth is enabled, a JWT presented as the Authorization
+        bearer on an OAuth2 target must be validated (resolving its user / spend /
+        rate-limit / RBAC identity), not short-circuited to anonymous. Upstream
+        OAuth2 access tokens are themselves JWT-shaped, so the passthrough shortcut
+        must defer to LiteLLM validation whenever enable_jwt_auth is on; otherwise a
+        real LiteLLM SSO identity is silently downgraded to an anonymous session.
+        """
+        from litellm.types.mcp import MCPAuth
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/atlassian_mcp",
+            "headers": [
+                (b"authorization", b"Bearer header.payload.signature"),
+            ],
+        }
+
+        async def mock_user_api_key_auth(api_key, request):
+            return UserAPIKeyAuth(api_key=api_key, user_id="jwt-user")
+
+        oauth2_server = MagicMock()
+        oauth2_server.auth_type = MCPAuth.oauth2
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth,
+            ) as mock_auth,
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+            patch(
+                "litellm.proxy.proxy_server.general_settings",
+                {"enable_jwt_auth": True},
+            ),
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = oauth2_server
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
+
+        mock_auth.assert_called_once()
+        assert auth_result.user_id == "jwt-user"
+
+    async def test_jwt_shaped_token_passes_through_when_jwt_auth_disabled(self):
+        """
+        The enable_jwt_auth gate is what keeps the phantom-401 fix working for
+        upstream OAuth2 tokens (which are JWT-shaped). With JWT auth off, a
+        JWT-shaped bearer on an OAuth2 target is an opaque upstream token: it must
+        still pass through without LiteLLM validation. Pins that the gate is keyed
+        on enable_jwt_auth, not on token shape alone.
+        """
+        from litellm.types.mcp import MCPAuth
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/atlassian_mcp",
+            "headers": [
+                (b"authorization", b"Bearer header.payload.signature"),
+            ],
+        }
+
+        async def fail_if_called(api_key, request):
+            raise AssertionError(
+                "user_api_key_auth must not be called for a JWT-shaped upstream "
+                "token when JWT auth is disabled"
+            )
+
+        oauth2_server = MagicMock()
+        oauth2_server.auth_type = MCPAuth.oauth2
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=fail_if_called,
+            ) as mock_auth,
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+            patch(
+                "litellm.proxy.proxy_server.general_settings",
+                {"enable_jwt_auth": False},
+            ),
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = oauth2_server
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
+
+        mock_auth.assert_not_called()
+        assert isinstance(auth_result, UserAPIKeyAuth)
+
+    async def test_non_sk_bearer_on_non_oauth2_target_still_raises(self):
+        """
+        Security guard: the passthrough shortcut only fires for OAuth2-mode
+        targets. A non-LiteLLM bearer on a non-OAuth2 server whose LiteLLM auth
+        fails must propagate the 401, never be admitted anonymously. Pins the
+        ``targets_oauth2`` guard so an attacker cannot exchange a garbage bearer
+        for an anonymous session against a non-OAuth2 server.
+        """
+        from fastapi import HTTPException
+
+        from litellm.types.mcp import MCPAuth
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/internal_mcp",
+            "headers": [
+                (b"authorization", b"Bearer not-a-litellm-key"),
+            ],
+        }
+
+        async def reject(api_key, request):
+            raise HTTPException(status_code=401, detail="invalid key")
+
+        api_key_server = MagicMock()
+        api_key_server.auth_type = MCPAuth.api_key
+        api_key_server.is_oauth_passthrough = False
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=reject,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = api_key_server
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+        assert exc_info.value.status_code == 401
+
     async def test_explicit_litellm_key_with_oauth2_authorization(self):
         """
         When both x-litellm-api-key AND Authorization header are present,

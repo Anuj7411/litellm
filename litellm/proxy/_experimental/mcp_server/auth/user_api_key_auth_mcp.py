@@ -14,6 +14,7 @@ from litellm.proxy._types import (
     SpecialHeaders,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import _get_bearer_token, user_api_key_auth
 from litellm.repositories.table_repositories import (
@@ -101,6 +102,19 @@ def _has_client_supplied_mcp_auth(
     mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
 ) -> bool:
     return bool(mcp_auth_header) or bool(mcp_server_auth_headers)
+
+
+def _bearer_is_litellm_auth_candidate(bearer_token: str) -> bool:
+    # A credential LiteLLM can authenticate on an MCP route: an "sk-" key, or a
+    # JWT when JWT auth is enabled. The enable_jwt_auth gate matters because
+    # upstream OAuth2 access tokens are themselves often JWT-shaped and must keep
+    # passing through rather than being validated (and failing) as LiteLLM keys.
+    if bearer_token.startswith("sk-"):
+        return True
+    from litellm.proxy.proxy_server import general_settings  # noqa: PLC0415
+
+    jwt_auth_enabled = general_settings.get("enable_jwt_auth", False) is True
+    return jwt_auth_enabled and JWTHandler.is_jwt(bearer_token)
 
 
 class MCPRequestHandler:
@@ -241,85 +255,18 @@ class MCPRequestHandler:
             )
         elif oauth2_headers:
             # Authorization without x-litellm-api-key: the bearer is either a
-            # LiteLLM key (backward compat) or an opaque OAuth2 token to forward
-            # upstream. Virtual keys start with "sk-" (enforced in
-            # user_api_key_auth), so a non-"sk-" bearer on an OAuth2-mode target is
-            # passed through without validation: validating it could only fail, and
-            # that 401 gets logged as an auth span on calls that actually succeed.
-            # Other bearers are validated so failures on non-OAuth2 servers still
-            # propagate instead of granting an anonymous session.
-            client_ip = IPAddressUtils.get_mcp_client_ip(request)
-            targets_oauth2 = MCPRequestHandler._target_servers_use_oauth2(
-                path=request_route,
-                mcp_servers=mcp_servers,
-                client_ip=client_ip,
-            )
-            bearer_token = _get_bearer_token(litellm_api_key)
-            if targets_oauth2 and not bearer_token.startswith("sk-"):
-                verbose_logger.debug(
-                    "MCP OAuth2 passthrough: forwarding non-LiteLLM bearer upstream"
+            # LiteLLM credential (sk- key or JWT) to validate, or an opaque OAuth2
+            # token to forward to an upstream oauth2-mode MCP server.
+            validated_user_api_key_auth = (
+                await MCPRequestHandler._resolve_oauth2_header_auth(
+                    request=request,
+                    litellm_api_key=litellm_api_key,
+                    request_route=request_route,
+                    mcp_servers=mcp_servers,
+                    mcp_auth_header=mcp_auth_header,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
                 )
-                validated_user_api_key_auth = UserAPIKeyAuth()
-            else:
-                try:
-                    validated_user_api_key_auth = await user_api_key_auth(
-                        api_key=litellm_api_key, request=request
-                    )
-                except (HTTPException, ProxyException) as e:
-                    # HTTPException.status_code is int; ProxyException.code is
-                    # normalized to str in its __init__ but can be ``"None"`` or
-                    # any non-numeric string when the caller didn't supply a
-                    # numeric code, so we compare against both int and str forms
-                    # rather than coercing (``int("None")`` would raise
-                    # ValueError and rewrite the auth error as a 500).
-                    status = e.status_code if isinstance(e, HTTPException) else e.code
-                    is_auth_error = status in (401, 403, "401", "403")
-                    is_unauthenticated = status in (401, "401")
-                    if is_auth_error and targets_oauth2:
-                        # "sk-"-shaped bearer that isn't a valid key: forward it to
-                        # the OAuth2 target as a token.
-                        verbose_logger.debug(
-                            "MCP OAuth2: target server is OAuth2-mode, treating "
-                            "Authorization as upstream OAuth2 token passthrough"
-                        )
-                        validated_user_api_key_auth = UserAPIKeyAuth()
-                    elif is_unauthenticated:
-                        # Pass-through cold-start return: per RFC 9728 / MCP
-                        # Authorization spec the client completes upstream OAuth
-                        # discovery and returns with ``Authorization: Bearer
-                        # <upstream-token>``. For ``auth_type=none`` passthrough
-                        # servers that bearer is not a LiteLLM key (auth above
-                        # failed) but is meant to be forwarded upstream
-                        # unchanged. Fall back to anonymous admission so the
-                        # caller is not rejected for following the discovery
-                        # flow without also setting ``x-litellm-api-key``.
-                        # Only trigger on 401 (token unrecognized); a 403 means
-                        # the key WAS recognized but is forbidden (e.g. over
-                        # budget / rate limited) and must propagate so those
-                        # controls are not bypassed via anonymous admission.
-                        mcp_servers_from_path = _parse_mcp_server_names_from_path(
-                            request_route, mcp_servers
-                        )
-                        if (
-                            mcp_servers_from_path is not None
-                            and not _has_client_supplied_mcp_auth(
-                                mcp_auth_header,
-                                mcp_server_auth_headers,
-                            )
-                            and _is_mcp_passthrough_cold_start(
-                                mcp_servers_from_path, client_ip=client_ip
-                            )
-                        ):
-                            verbose_logger.debug(
-                                "MCP pass-through return: target server is "
-                                "passthrough, treating Authorization as "
-                                "upstream OAuth token for delegated auth"
-                            )
-                            validated_user_api_key_auth = UserAPIKeyAuth()
-                        else:
-                            raise
-                    else:
-                        raise
+            )
         else:
             try:
                 validated_user_api_key_auth = await user_api_key_auth(
@@ -360,6 +307,75 @@ class MCPRequestHandler:
             oauth2_headers,
             dict(headers),
         )
+
+    @staticmethod
+    async def _resolve_oauth2_header_auth(
+        request: Request,
+        litellm_api_key: str,
+        request_route: str,
+        mcp_servers: Optional[List[str]],
+        mcp_auth_header: Optional[str],
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
+    ) -> UserAPIKeyAuth:
+        client_ip = IPAddressUtils.get_mcp_client_ip(request)
+        targets_oauth2 = MCPRequestHandler._target_servers_use_oauth2(
+            path=request_route,
+            mcp_servers=mcp_servers,
+            client_ip=client_ip,
+        )
+        bearer_token = _get_bearer_token(litellm_api_key)
+
+        # An opaque upstream OAuth2 token only ever fails LiteLLM validation, and
+        # that failure surfaces as a phantom 401 auth span on tool calls that
+        # actually succeed. Forward it without validating; credentials LiteLLM can
+        # authenticate fall through to validation below.
+        if targets_oauth2 and not _bearer_is_litellm_auth_candidate(bearer_token):
+            verbose_logger.debug(
+                "MCP OAuth2 passthrough: forwarding opaque upstream bearer without LiteLLM validation"
+            )
+            return UserAPIKeyAuth()
+
+        try:
+            return await user_api_key_auth(api_key=litellm_api_key, request=request)
+        except (HTTPException, ProxyException) as e:
+            # ProxyException.code is normalized to str (possibly "None"), so
+            # compare against both int and str forms rather than coercing;
+            # int("None") would raise and rewrite the auth error as a 500.
+            status = e.status_code if isinstance(e, HTTPException) else e.code
+            is_unauthenticated = status in (401, "401")
+            is_auth_error = is_unauthenticated or status in (403, "403")
+
+            if is_auth_error and targets_oauth2:
+                raise RuntimeError("POST_VALIDATION_OAUTH2_BRANCH_REACHED")
+                verbose_logger.debug(
+                    "MCP OAuth2 passthrough: forwarding sk- bearer that failed "
+                    "LiteLLM validation as an upstream OAuth2 token"
+                )
+                return UserAPIKeyAuth()
+
+            mcp_servers_from_path = _parse_mcp_server_names_from_path(
+                request_route, mcp_servers
+            )
+            is_cold_start_passthrough = (
+                mcp_servers_from_path is not None
+                and not _has_client_supplied_mcp_auth(
+                    mcp_auth_header, mcp_server_auth_headers
+                )
+                and _is_mcp_passthrough_cold_start(
+                    mcp_servers_from_path, client_ip=client_ip
+                )
+            )
+            # Cold-start passthrough: the client returns from upstream OAuth
+            # discovery with a non-LiteLLM bearer. Admit anonymously only on a 401
+            # (unrecognized token); a 403 is a recognized-but-forbidden key whose
+            # budget / rate-limit controls must not be bypassed.
+            if is_unauthenticated and is_cold_start_passthrough:
+                verbose_logger.debug(
+                    "MCP pass-through return: forwarding Authorization as upstream OAuth token for delegated auth"
+                )
+                return UserAPIKeyAuth()
+
+            raise
 
     @staticmethod
     def _extract_target_server_names_from_path(path: str) -> List[str]:
