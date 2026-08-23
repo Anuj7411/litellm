@@ -286,7 +286,10 @@ def search(
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
             model=model_name,
-            optional_params=optional_params,
+            # `query` is passed separately from `optional_params` to the request
+            # transformers below, but completion_cost() needs it (via optional_params)
+            # to bill multi-query search requests per query instead of as a single query.
+            optional_params={**optional_params, "query": query},
             litellm_params={
                 "litellm_call_id": litellm_call_id,
                 "api_base": complete_url,
