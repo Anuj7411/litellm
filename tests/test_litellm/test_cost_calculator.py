@@ -3631,6 +3631,50 @@ def test_batch_cost_calculator_honors_an_explicitly_zero_batch_rate(
     assert completion_cost_value == pytest.approx(expected_completion)
 
 
+@pytest.mark.parametrize(
+    "cache_creation_rate,expected_cache_creation_cost",
+    [
+        (0.0, 0.0),
+        (5e-7, 2000 * 5e-7 / 2),
+        (None, 2000 * 3e-6 / 2),
+    ],
+    ids=["explicit-zero", "explicit-nonzero", "unset"],
+)
+def test_batch_cost_calculator_honors_an_explicitly_zero_cache_creation_rate(
+    cache_creation_rate: float | None,
+    expected_cache_creation_cost: float,
+) -> None:
+    """A cache_creation_input_token_cost of 0.0 means cache writes are free, not unset.
+
+    Gating on truthiness (`... or input_cost_per_token`) read an explicit 0.0
+    as absent and billed cache-creation tokens at the full input rate instead.
+    """
+    from litellm.cost_calculator import batch_cost_calculator
+
+    base_model_info: ModelInfo = {
+        "supported_openai_params": [],
+        "input_cost_per_token": 3e-6,
+        "output_cost_per_token": 15e-6,
+        "cache_read_input_token_cost": 3e-7,
+    }
+    model_info: ModelInfo = (
+        base_model_info
+        if cache_creation_rate is None
+        else {**base_model_info, "cache_creation_input_token_cost": cache_creation_rate}
+    )
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_batch_cache_usage(),
+        model="claude-sonnet-4-5-20250929",
+        custom_llm_provider="anthropic",
+        model_info=model_info,
+    )
+
+    base_input_cost = 1000 * 3e-6 / 2
+    cache_read_cost = 8000 * 3e-7 / 2
+    assert prompt_cost == pytest.approx(base_input_cost + cache_read_cost + expected_cache_creation_cost)
+
+
 def test_combine_usage_objects_sums_mirrored_cache_write_fields_once():
     """
     cache_write_tokens and cache_creation_tokens mirror each other on
