@@ -192,8 +192,12 @@ def _handle_128k_pricing(
         prompt_cost = prompt_tokens * (model_info["input_cost_per_token"] or 0.0)
 
     ## CALCULATE OUTPUT COST
+    # Gemini's >128k tier is selected by prompt length alone and then applies to both
+    # input and output rates (https://ai.google.dev/gemini-api/docs/pricing) - using
+    # completion_tokens here would almost never trigger the higher tier, since replies
+    # are typically far shorter than the 128k-token prompt that earned it.
     output_cost_per_token_above_128k_tokens = model_info.get("output_cost_per_token_above_128k_tokens")
-    if _is_above_128k(tokens=completion_tokens) and output_cost_per_token_above_128k_tokens is not None:
+    if _is_above_128k(tokens=prompt_tokens) and output_cost_per_token_above_128k_tokens is not None:
         completion_cost = completion_tokens * output_cost_per_token_above_128k_tokens
     else:
         completion_cost = completion_tokens * (model_info["output_cost_per_token"] or 0.0)
