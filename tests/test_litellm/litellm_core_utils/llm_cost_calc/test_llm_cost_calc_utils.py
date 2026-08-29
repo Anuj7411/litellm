@@ -887,6 +887,52 @@ def test_generic_cost_per_token_tier_without_a_1hr_cache_rate_bills_the_tier_cac
         litellm.model_cost.pop(model, None)
 
 
+def test_generic_cost_per_token_model_without_a_1hr_cache_rate_bills_the_base_cache_creation_rate():
+    """Regression: a model priced via the non-tiered path (the common case) that sets
+    cache_creation_input_token_cost but has no cache_creation_input_token_cost_above_1hr
+    key must still bill 1-hour cache writes at the base cache-creation rate, not $0 -
+    mirroring the fallback the tiered-pricing path already applies (see
+    test_generic_cost_per_token_tier_without_a_1hr_cache_rate_bills_the_tier_cache_creation_rate)."""
+    model = "litellm-test-no-1hr-cache-rate"
+    custom_llm_provider = "openrouter"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": custom_llm_provider,
+                "mode": "chat",
+                "input_cost_per_token": 1.5e-05,
+                "output_cost_per_token": 7.5e-05,
+                "cache_creation_input_token_cost": 1.875e-05,
+            }
+        }
+    )
+
+    try:
+        usage = Usage(
+            prompt_tokens=1200,
+            completion_tokens=10,
+            total_tokens=1210,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cache_creation_tokens=1000,
+                cache_creation_token_details=CacheCreationTokenDetails(
+                    ephemeral_5m_input_tokens=0, ephemeral_1h_input_tokens=1000
+                ),
+            ),
+        )
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        base_cache_creation_rate = 1.875e-05
+        expected_prompt = (200 * 1.5e-05) + (1000 * base_cache_creation_rate)
+        assert round(prompt_cost, 12) == round(expected_prompt, 12)
+        assert round(completion_cost, 12) == round(10 * 7.5e-05, 12)
+    finally:
+        litellm.model_cost.pop(model, None)
+
+
 def test_generic_cost_per_token_tier_without_an_input_rate_is_not_a_priced_tier():
     model = "litellm-test-tiered-no-input-rate"
     custom_llm_provider = "openrouter"

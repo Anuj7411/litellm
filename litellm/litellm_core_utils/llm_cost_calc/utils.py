@@ -331,7 +331,11 @@ def _get_token_base_cost(
     cache_creation_cost = cast(float, _get_cost_per_unit(model_info, cache_creation_cost_key))
     cache_creation_cost_above_1hr = cast(
         float,
-        _get_cost_per_unit(model_info, "cache_creation_input_token_cost_above_1hr"),
+        _get_cost_per_unit(
+            model_info,
+            "cache_creation_input_token_cost_above_1hr",
+            cache_creation_cost,
+        ),
     )
     cache_read_cost = cast(float, _get_cost_per_unit(model_info, cache_read_cost_key))
 
