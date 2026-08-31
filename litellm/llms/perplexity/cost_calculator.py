@@ -9,13 +9,16 @@ from litellm.types.utils import Usage
 from litellm.utils import get_model_info
 
 
-def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
+def cost_per_token(model: str, usage: Usage, search_context_size: str | None = None) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
     Input:
         - model: str, the model name without provider prefix
         - usage: LiteLLM Usage block, containing perplexity-specific usage information
+        - search_context_size: str | None, the `web_search_options.search_context_size`
+          ("low" | "medium" | "high") requested for this call. Perplexity's own default,
+          like OpenAI's, is "medium" when the caller doesn't set it.
 
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
@@ -91,10 +94,17 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
     if num_search_queries > 0 and search_cost_value is not None:
         # Handle both dict and float formats
         if isinstance(search_cost_value, dict):
-            # search_context_cost_per_query stores the per-request price in USD
-            # (e.g. sonar low = $0.005/request). Use it directly, matching the
-            # gemini cost calculator which reads the same field per request.
-            search_cost_per_query = _safe_float_cast(search_cost_value.get("search_context_size_low", 0))
+            # search_context_cost_per_query stores a separate per-request price in USD
+            # for each of the "low" | "medium" | "high" tiers (e.g. sonar: low=$0.005,
+            # medium=$0.008, high=$0.012). Bill the tier actually requested via
+            # web_search_options.search_context_size, defaulting to "medium" the same
+            # way Perplexity/OpenAI do when the caller doesn't set it.
+            if search_context_size == "low":
+                search_cost_per_query = _safe_float_cast(search_cost_value.get("search_context_size_low", 0))
+            elif search_context_size == "high":
+                search_cost_per_query = _safe_float_cast(search_cost_value.get("search_context_size_high", 0))
+            else:
+                search_cost_per_query = _safe_float_cast(search_cost_value.get("search_context_size_medium", 0))
         else:
             search_cost_per_query = _safe_float_cast(search_cost_value)
         search_cost: Final = num_search_queries * search_cost_per_query

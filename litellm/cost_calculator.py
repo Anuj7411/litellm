@@ -338,6 +338,8 @@ def cost_per_token(
     response: Any | None = None,
     ### REQUEST MODEL ###
     request_model: str | None = None,  # original request model for router detection
+    ### PERPLEXITY WEB SEARCH TIER ###
+    search_context_size: str | None = None,  # web_search_options.search_context_size, for perplexity pricing
 ) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -636,7 +638,7 @@ def cost_per_token(
     elif custom_llm_provider == "tencent":
         return tencent_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "perplexity":
-        return perplexity_cost_per_token(model=model, usage=usage_block)
+        return perplexity_cost_per_token(model=model, usage=usage_block, search_context_size=search_context_size)
     elif custom_llm_provider == "xai":
         return xai_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "lemonade":
@@ -1250,6 +1252,13 @@ def completion_cost(
         if service_tier is None and optional_params is not None:
             service_tier = optional_params.get("service_tier")
 
+        # Extract perplexity's web_search_options.search_context_size, if set
+        search_context_size: str | None = None
+        if optional_params is not None:
+            web_search_options = optional_params.get("web_search_options")
+            if isinstance(web_search_options, dict):
+                search_context_size = web_search_options.get("search_context_size")
+
         service_tier = _normalize_service_tier(service_tier)
 
         # Extract service_tier from completion_response if not provided
@@ -1642,6 +1651,7 @@ def completion_cost(
                     vertex_location=vertex_location,
                     response=completion_response,
                     request_model=request_model_for_cost,
+                    search_context_size=search_context_size,
                 )
 
                 # Get additional costs from provider (e.g., routing fees, infrastructure costs)

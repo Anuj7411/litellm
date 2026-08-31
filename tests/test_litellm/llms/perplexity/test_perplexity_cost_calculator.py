@@ -126,6 +126,79 @@ class TestPerplexityCostCalculator:
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
 
+    @pytest.mark.parametrize(
+        "search_context_size, expected_cost_per_query",
+        [("low", 0.005), ("medium", 0.008), ("high", 0.012)],
+    )
+    def test_search_queries_cost_uses_requested_tier(
+        self, search_context_size, expected_cost_per_query
+    ):
+        """
+        Regression: `perplexity/sonar` prices search queries per
+        `web_search_options.search_context_size` tier (low=$0.005, medium=$0.008,
+        high=$0.012 per query). Pre-fix, every request was billed at the "low" rate
+        regardless of the tier actually requested, silently undercharging (e.g. "high"
+        billed as "low" is a 58% undercharge).
+        """
+        usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=10),
+        )
+
+        _, completion_cost_val = perplexity_cost_per_token(
+            model="sonar", usage=usage, search_context_size=search_context_size
+        )
+
+        expected_completion_cost = (50 * 1e-6) + (10 * expected_cost_per_query)
+        assert math.isclose(completion_cost_val, expected_completion_cost, rel_tol=1e-6)
+
+    def test_search_queries_cost_defaults_to_medium_tier(self):
+        """
+        Regression: when `web_search_options.search_context_size` isn't set,
+        Perplexity/OpenAI both default to "medium" - not "low". Pre-fix this
+        function always billed the "low" rate regardless.
+        """
+        usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=4),
+        )
+
+        _, completion_cost_val = perplexity_cost_per_token(model="sonar", usage=usage)
+
+        expected_completion_cost = (50 * 1e-6) + (4 * 0.008)
+        assert math.isclose(completion_cost_val, expected_completion_cost, rel_tol=1e-6)
+
+    def test_completion_cost_threads_search_context_size_from_optional_params(self):
+        """
+        Regression: `completion_cost` must read `web_search_options.search_context_size`
+        from `optional_params` and pass it all the way down to the Perplexity per-tier
+        pricing lookup, not just the standalone `perplexity_cost_per_token` helper.
+        """
+        from litellm import ModelResponse
+
+        usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=10),
+        )
+        response = ModelResponse()
+        response.usage = usage
+        response.model = "sonar"
+
+        total_cost = completion_cost(
+            completion_response=response,
+            custom_llm_provider="perplexity",
+            optional_params={"web_search_options": {"search_context_size": "high"}},
+        )
+
+        expected_total = (100 * 1e-6) + (50 * 1e-6) + (10 * 0.012)
+        assert math.isclose(total_cost, expected_total, rel_tol=1e-6)
+
     def test_reasoning_tokens_from_direct_attribute(self):
         """Test reasoning tokens cost calculation from direct attribute."""
         usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
