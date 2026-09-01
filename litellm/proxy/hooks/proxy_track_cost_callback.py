@@ -272,7 +272,14 @@ class _ProxyDBLogger(CustomLogger):
 
             if response_cost is not None:
                 user_api_key: Final = metadata.get("user_api_key", None)
-                if kwargs.get("cache_hit", False) is True:
+                # sl_object["response_cost"] is already cache-hit-aware: it is built from
+                # llm_response_cost (0.0 on a cache hit, since _response_cost_calculator
+                # short-circuits) plus any guardrail_information_cost, so a guardrail that
+                # ran on a cached request still bills correctly. Re-zeroing it here would
+                # discard that guardrail charge. Only the kwargs-only fallback (no
+                # sl_object) needs the override, since that raw value was never adjusted
+                # for cache_hit.
+                if sl_object is None and kwargs.get("cache_hit", False) is True:
                     response_cost = 0.0
                     verbose_proxy_logger.debug("Cache Hit: response_cost %s, for user_id %s", response_cost, user_id)
 

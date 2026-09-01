@@ -1711,6 +1711,109 @@ async def test_async_post_call_failure_hook_records_recovered_partial_spend():
 
 
 @pytest.mark.asyncio
+async def test_track_cost_callback_keeps_guardrail_cost_on_cache_hit():
+    """A guardrail pre-call hook runs before the response-cache lookup, so a
+    cache-hit completion can still have incurred a real, billable guardrail
+    charge (e.g. Bedrock ApplyGuardrail). sl_object["response_cost"] is built
+    from llm_response_cost (already 0.0 on a cache hit) plus guardrail_cost,
+    so it is correct as-is; the cache_hit override must not re-zero it and
+    discard that guardrail charge."""
+    logger = _ProxyDBLogger()
+
+    kwargs = {
+        "call_type": "acompletion",
+        "model": "gpt-4",
+        "cache_hit": True,
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "hashed-key",
+                "user_api_key_user_id": "user-1",
+                "user_api_key_team_id": "team-1",
+            }
+        },
+        "standard_logging_object": {
+            "response_cost": 0.00015,
+            "request_tags": [],
+            "metadata": {},
+        },
+    }
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.increment_spend_counters",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.update_cache",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+        ) as mock_proxy_logging,
+    ):
+        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+        mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response={"id": "cached-call-1"},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        update_kwargs = mock_proxy_logging.db_spend_update_writer.update_database.await_args.kwargs
+        assert update_kwargs["response_cost"] == pytest.approx(0.00015)
+
+
+@pytest.mark.asyncio
+async def test_track_cost_callback_zeroes_cache_hit_response_cost_without_standard_logging_object():
+    """Without a standard_logging_object, response_cost is read straight off
+    kwargs and has not been adjusted for cache_hit anywhere upstream, so the
+    cache_hit override is still needed on that fallback path."""
+    logger = _ProxyDBLogger()
+
+    kwargs = {
+        "call_type": "acompletion",
+        "model": "gpt-4",
+        "cache_hit": True,
+        "response_cost": 0.02,
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "hashed-key",
+                "user_api_key_user_id": "user-1",
+                "user_api_key_team_id": "team-1",
+            }
+        },
+    }
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.increment_spend_counters",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.update_cache",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+        ) as mock_proxy_logging,
+    ):
+        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+        mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response={"id": "cached-call-2"},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        update_kwargs = mock_proxy_logging.db_spend_update_writer.update_database.await_args.kwargs
+        assert update_kwargs["response_cost"] == 0.0
+
+
+@pytest.mark.asyncio
 async def test_track_cost_callback_enriches_user_id_for_mcp_style_metadata():
     """MCP tool calls may only carry user_api_key; user/team rollups still need user_id."""
     from litellm.proxy._types import UserAPIKeyAuth
