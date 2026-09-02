@@ -1270,6 +1270,37 @@ def test_default_image_cost_calculator(monkeypatch):
     assert cost == 10485760
 
 
+@pytest.mark.parametrize(
+    "model,model_cost_key",
+    [
+        ("cohere/rerank-english-v3.0", "rerank-english-v3.0"),
+        ("azure_ai/cohere-rerank-v3-english", "azure_ai/cohere-rerank-v3-english"),
+    ],
+)
+def test_completion_cost_rerank_defaults_search_units_when_missing(_local_model_cost_map, model, model_cost_key):
+    """A rerank response whose ``meta`` omits ``billed_units.search_units`` (e.g. a
+    Cohere-compatible endpoint that doesn't echo it back) must still bill the
+    documented one-search-unit-per-request default, not $0."""
+    from litellm import RerankResponse
+
+    response = RerankResponse(
+        id="b01dbf2e-63c8-4981-9e69-32241da559ed",
+        results=[
+            {
+                "document": {"id": "1", "text": "Paris is the capital of France."},
+                "index": 0,
+                "relevance_score": 0.990732,
+            },
+        ],
+        meta={},
+    )
+
+    cost = completion_cost(model=model, completion_response=response, call_type="arerank")
+
+    expected_cost = litellm.model_cost[model_cost_key]["input_cost_per_query"]
+    assert cost == expected_cost
+
+
 def test_cost_calculator_with_cache_creation():
     from litellm import completion_cost
     from litellm.types.utils import Choices, Message, Usage

@@ -1485,12 +1485,10 @@ def completion_cost(
                             billed_units = {}
 
                         rerank_billed_units = RerankBilledUnits(
-                            search_units=billed_units.get("search_units"),
+                            search_units=billed_units.get("search_units")
+                            or 1,  # cohere charges per request by default.
                             total_tokens=billed_units.get("total_tokens"),
                         )
-
-                        search_units = billed_units.get("search_units") or 1  # cohere charges per request by default.
-                        completion_tokens = search_units
                 elif call_type in _SEARCH_CALL_TYPES:
                     from litellm.search import search_provider_cost_per_query
 
