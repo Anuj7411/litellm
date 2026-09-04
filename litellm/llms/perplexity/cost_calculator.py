@@ -49,8 +49,19 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
             return default
 
     ## CALCULATE INPUT COST
+    prompt_tokens_details: Final = getattr(usage, "prompt_tokens_details", None)
+    cached_tokens: Final[int] = (
+        prompt_tokens_details.cached_tokens
+        if prompt_tokens_details is not None and prompt_tokens_details.cached_tokens is not None
+        else 0
+    )
     input_cost_per_token: Final = _safe_float_cast(model_info.get("input_cost_per_token"))
-    prompt_cost: float = (usage.prompt_tokens or 0) * input_cost_per_token
+    cache_read_cost_value: Final = model_info.get("cache_read_input_token_cost")
+    cache_read_cost_per_token: Final = (
+        _safe_float_cast(cache_read_cost_value) if cache_read_cost_value is not None else input_cost_per_token
+    )
+    non_cached_prompt_tokens: Final = max((usage.prompt_tokens or 0) - cached_tokens, 0)
+    prompt_cost: float = non_cached_prompt_tokens * input_cost_per_token + cached_tokens * cache_read_cost_per_token
 
     ## ADD CITATION TOKENS COST (if present)
     citation_tokens: Final = getattr(usage, "citation_tokens", 0) or 0

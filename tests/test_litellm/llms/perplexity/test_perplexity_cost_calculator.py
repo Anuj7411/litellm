@@ -523,3 +523,45 @@ class TestPerplexityCostCalculator:
         )
 
         assert math.isclose(total_cost, 1000 * 1.4e-06 + 500 * 4.4e-06, rel_tol=1e-9)
+
+    def test_manual_fallback_discounts_cached_prompt_tokens(self):
+        """Regression: the manual fallback (used whenever `usage.cost` is absent) must
+        bill cache-hit prompt tokens at `cache_read_input_token_cost`, not the full
+        `input_cost_per_token` rate.
+
+        Pre-fix, `prompt_cost` was `usage.prompt_tokens * input_cost_per_token` with no
+        reference to `prompt_tokens_details.cached_tokens` at all, so on
+        perplexity/perplexity/kimi-k3 (input $3e-6, cache_read $3e-7 - a 10x discount)
+        this asserted 100000 * 3e-6 = $0.3 for 80000 cached + 20000 uncached tokens,
+        instead of the correct $0.084.
+        """
+        usage = Usage(
+            prompt_tokens=100_000,
+            completion_tokens=1000,
+            total_tokens=101_000,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=80_000),
+        )
+
+        prompt_cost, completion_cost = perplexity_cost_per_token(model="perplexity/kimi-k3", usage=usage)
+
+        # perplexity/perplexity/kimi-k3: input=$3e-6, cache_read=$3e-7, output=$1.5e-5
+        expected_prompt_cost = 20_000 * 3e-6 + 80_000 * 3e-7
+        expected_completion_cost = 1000 * 1.5e-5
+
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-9)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-9)
+        assert prompt_cost < 100_000 * 3e-6
+
+    def test_manual_fallback_no_cached_tokens_matches_full_rate(self):
+        """When cached_tokens is 0 (or prompt_tokens_details is absent), the fallback
+        must bill every prompt token at the full input rate."""
+        usage = Usage(
+            prompt_tokens=100_000,
+            completion_tokens=1000,
+            total_tokens=101_000,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=0),
+        )
+
+        prompt_cost, _ = perplexity_cost_per_token(model="perplexity/kimi-k3", usage=usage)
+
+        assert math.isclose(prompt_cost, 100_000 * 3e-6, rel_tol=1e-9)
