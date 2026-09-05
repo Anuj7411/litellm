@@ -5825,6 +5825,31 @@ def test_combine_fallback_usage():
     assert chunk.usage.total_tokens == 15
 
 
+def test_combine_fallback_usage_adds_pre_fallback_usage():
+    """
+    Regression test: the tokens already consumed on the original call before a
+    mid-stream fallback (e.g. partial Anthropic usage reported before the stream
+    errored out) must be added to the fallback deployment's usage, not discarded.
+    """
+    from litellm.router import Router
+    from litellm.types.utils import Usage
+
+    fallback_chunk = litellm.ModelResponseStream(
+        id="test",
+        model="gpt-4o",
+        choices=[],
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+    pre_fallback_usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    Router._combine_fallback_usage(fallback_chunk, pre_fallback_usage)
+
+    assert fallback_chunk.usage is not None
+    assert fallback_chunk.usage.prompt_tokens == 1100
+    assert fallback_chunk.usage.completion_tokens == 550
+    assert fallback_chunk.usage.total_tokens == 1650
+
+
 @pytest.mark.asyncio
 async def test_acompletion_streaming_iterator_does_not_log_success_on_terminal_failure():
     """A mid-stream failure with no successful fallback raises and is logged as
