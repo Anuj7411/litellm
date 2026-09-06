@@ -94,6 +94,47 @@ class TestCallbackDurationMs:
         assert hidden.get("litellm_overhead_time_ms") is not None
 
 
+class TestCostCalculationSeesResponseDuration:
+    """Regression test: cost calculation must run after timing metrics are set.
+
+    Per-second-priced models (e.g. Replicate) compute cost from
+    result._response_ms. If set_hidden_params() (which triggers cost
+    calculation via logging_obj._response_cost_calculator) ran before
+    set_timing_metrics() set that attribute, the duration would always be
+    seen as unset and per-second billing would silently collapse to ~0.
+    """
+
+    def test_response_ms_is_set_before_cost_calculation_runs(self):
+        result = ModelResponse()
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {}
+        logging_obj.caching_details = None
+        logging_obj.litellm_call_id = "test-call-id"
+        del logging_obj.callback_duration_ms
+
+        seen_response_ms = {}
+
+        def fake_response_cost_calculator(result, litellm_model_name, router_model_id):
+            seen_response_ms["value"] = getattr(result, "_response_ms", None)
+            return 0.001
+
+        logging_obj._response_cost_calculator.side_effect = fake_response_cost_calculator
+
+        start = datetime.datetime(2025, 1, 1, 0, 0, 0)
+        end = datetime.datetime(2025, 1, 1, 0, 0, 45)  # 45s Replicate GPU job
+
+        update_response_metadata(
+            result=result,
+            logging_obj=logging_obj,
+            model="replicate/llama-2-70b-chat:2796ee9483c3fd7aa2e171d38f4ca12251a30609463dcfd4cd76703f22e96cdf",
+            kwargs={},
+            start_time=start,
+            end_time=end,
+        )
+
+        assert seen_response_ms["value"] == 45000.0
+
+
 class TestDictResultsSkipMetadataUpdate:
     """Regression for /v1/messages cost-breakdown clobbering: AnthropicMessagesResponse
     is a TypedDict, so apply() can never attach _hidden_params to it and the whole

@@ -198,6 +198,9 @@ def update_response_metadata(
         return
 
     metadata: Final = ResponseMetadata(result)
-    metadata.set_hidden_params(logging_obj, model, kwargs)
+    # Timing must be set before hidden params: set_hidden_params() triggers cost
+    # calculation, and per-second-priced models (e.g. Replicate) read the request
+    # duration off result._response_ms, which set_timing_metrics() sets.
     metadata.set_timing_metrics(start_time, end_time, logging_obj, include_overhead)
+    metadata.set_hidden_params(logging_obj, model, kwargs)
     metadata.apply()
