@@ -8,12 +8,40 @@ from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 
+import litellm
 from litellm.utils import get_model_info
 
 PROVIDER_USAGE_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
     tuple[Mapping[str, object], ...]
 )
 EMPTY_OPTIONAL_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
+
+# Request param that carries the provider's search mode/depth, keyed by provider.
+# A mode value only changes the priced model when "<provider>/search-<mode>" is
+# an actual entry in the cost map; otherwise the base "<provider>/search" price applies.
+SEARCH_MODE_PARAM_BY_PROVIDER: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "tavily": "search_depth",
+        "linkup": "depth",
+    }
+)
+
+
+def _model_for_search_mode(
+    model: str,
+    custom_llm_provider: str | None,
+    optional_params: Mapping[str, object] | None,
+) -> str:
+    if custom_llm_provider is None or optional_params is None:
+        return model
+    mode_param: Final = SEARCH_MODE_PARAM_BY_PROVIDER.get(custom_llm_provider)
+    if mode_param is None:
+        return model
+    mode_value: Final = optional_params.get(mode_param)
+    if not isinstance(mode_value, str):
+        return model
+    mode_specific_model: Final = f"{custom_llm_provider}/search-{mode_value}"
+    return mode_specific_model if mode_specific_model in litellm.model_cost else model
 
 
 def _provider_usage(
@@ -61,6 +89,7 @@ def search_provider_cost_per_query(
         )
         return (input_cost, 0.0)
 
+    model = _model_for_search_mode(model, custom_llm_provider, optional_params)
     model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
 
     # Check for tiered pricing (e.g., Exa AI based on max_results)
