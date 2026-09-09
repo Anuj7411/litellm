@@ -147,6 +147,28 @@ class TestHostedVLLMRerankTransform:
         with pytest.raises(ValueError, match="Missing required fields in the result="):
             self.config._transform_response(response_dict)
 
+    def test_calculate_rerank_cost_bills_from_total_tokens(self):
+        """hosted_vllm only ever reports total_tokens usage (see
+        test_transform_response above), never search_units. A deployment
+        configured with input_cost_per_token must still be billed a nonzero
+        cost from that total_tokens count.
+        """
+        response_dict = {
+            "id": "abc123",
+            "results": [{"index": 0, "relevance_score": 0.9}],
+            "usage": {"total_tokens": 4500},
+        }
+        result = self.config._transform_response(response_dict)
+
+        prompt_cost, completion_cost = self.config.calculate_rerank_cost(
+            model=self.model,
+            billed_units=result.meta["billed_units"],
+            model_info={"input_cost_per_token": 2e-6},
+        )
+
+        assert prompt_cost == 4500 * 2e-6
+        assert completion_cost == 0.0
+
 
 class TestGetOptionalRerankParamsInstruction:
     """`instruction` is threaded through get_optional_rerank_params only when set."""

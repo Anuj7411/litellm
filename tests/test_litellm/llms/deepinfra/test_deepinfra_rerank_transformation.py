@@ -221,6 +221,37 @@ class TestDeepinfraRerankTransform:
         # Should return the original model_response when fallback occurs
         assert result == model_response
 
+    def test_calculate_rerank_cost_bills_from_total_tokens(self):
+        """DeepInfra only ever reports total_tokens usage (see
+        test_transform_rerank_response_success above), never search_units. A
+        model configured with input_cost_per_token must still be billed a
+        nonzero cost from that total_tokens count.
+        """
+        response_data = {
+            "scores": [0.9],
+            "input_tokens": 42,
+            "request_id": "test-request-123",
+        }
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.json.return_value = response_data
+        mock_response.text = json.dumps(response_data)
+
+        result = self.config.transform_rerank_response(
+            model=self.model,
+            raw_response=mock_response,
+            model_response=RerankResponse(),
+            logging_obj=MagicMock(),
+        )
+
+        prompt_cost, completion_cost = self.config.calculate_rerank_cost(
+            model=self.model,
+            billed_units=result.meta["billed_units"],
+            model_info={"input_cost_per_token": 3e-6},
+        )
+
+        assert prompt_cost == 42 * 3e-6
+        assert completion_cost == 0.0
+
     def test_get_supported_cohere_rerank_params(self):
         """Test getting supported parameters for DeepInfra rerank."""
         supported_params = self.config.get_supported_cohere_rerank_params(self.model)

@@ -118,19 +118,19 @@ class BaseRerankConfig(ABC):
             Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
         """
 
-        if (
-            model_info is None
-            or "input_cost_per_query" not in model_info
-            or model_info["input_cost_per_query"] is None
-            or billed_units is None
-        ):
+        if model_info is None or billed_units is None:
             return 0.0, 0.0
 
         search_units: Final = billed_units.get("search_units")
+        input_cost_per_query: Final = model_info.get("input_cost_per_query")
+        if search_units is not None and input_cost_per_query is not None:
+            return input_cost_per_query * search_units, 0.0
 
-        if search_units is None:
-            return 0.0, 0.0
+        # Some providers (e.g. hosted_vllm, deepinfra, infinity) bill rerank
+        # requests by total_tokens instead of search_units.
+        total_tokens: Final = billed_units.get("total_tokens")
+        input_cost_per_token: Final = model_info.get("input_cost_per_token")
+        if total_tokens is not None and input_cost_per_token is not None:
+            return input_cost_per_token * total_tokens, 0.0
 
-        prompt_cost: Final = model_info["input_cost_per_query"] * search_units
-
-        return prompt_cost, 0.0
+        return 0.0, 0.0
