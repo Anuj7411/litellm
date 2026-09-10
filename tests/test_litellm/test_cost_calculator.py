@@ -1321,6 +1321,35 @@ def test_default_image_cost_calculator(monkeypatch):
     assert cost == 10485760
 
 
+def test_default_image_cost_calculator_gpt_image_1_no_quality_defaults_to_medium():
+    """
+    Regression test: gpt-image-1 pricing only has low/medium/high tiered entries in the
+    cost map. When a caller doesn't specify `quality` (e.g. the OpenAI passthrough logging
+    handler's image edit path, which always passes quality=None), the calculator falls back
+    to a hardcoded quality tier since there's no un-tiered entry for gpt-image-1.
+
+    The bug: that fallback used the "high" tier instead of "medium", quadrupling the reported
+    cost for a 1024x1024 image (0.167 vs the correct 0.042).
+    """
+    from litellm.cost_calculator import default_image_cost_calculator
+
+    medium_cost_per_image = litellm.model_cost["medium/1024-x-1024/gpt-image-1"]["input_cost_per_image"]
+    high_cost_per_image = litellm.model_cost["high/1024-x-1024/gpt-image-1"]["input_cost_per_image"]
+    assert medium_cost_per_image != high_cost_per_image
+
+    cost = default_image_cost_calculator(
+        model="gpt-image-1",
+        custom_llm_provider="openai",
+        quality=None,
+        n=1,
+        size="1024x1024",
+        optional_params={},
+    )
+
+    assert cost == medium_cost_per_image
+    assert cost != high_cost_per_image
+
+
 def test_cost_calculator_with_cache_creation():
     from litellm import completion_cost
     from litellm.types.utils import Choices, Message, Usage
