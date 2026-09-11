@@ -3495,6 +3495,97 @@ def test_custom_pricing_applies_cache_creation_input_cost_via_cache_write_tokens
     assert completion_cost == pytest.approx(expected_completion)
 
 
+def test_vertex_ai_above_128k_pricing_still_discounts_cached_tokens(monkeypatch):
+    """
+    Regression test: litellm.llms.vertex_ai.cost_calculator.cost_per_token() used to route any
+    model carrying input_cost_per_token_above_128k_tokens / output_cost_per_token_above_128k_tokens
+    through a hand-rolled _handle_128k_pricing() helper that billed the full prompt_tokens count at
+    the flat per-token rate, ignoring cache_read_input_token_cost entirely (and reasoning/audio/image
+    /video costs too). A request that is 90% cache hits was billed as if none of it were cached.
+
+    generic_cost_per_token already resolves input_cost_per_token_above_<N>_tokens generically
+    (128k included) while discounting cached tokens, so cost_per_token should just delegate to it.
+    """
+    from litellm.llms.vertex_ai.cost_calculator import cost_per_token
+
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "vertex_ai/claude-tiered-test",
+        {
+            "input_cost_per_token": 3e-6,
+            "output_cost_per_token": 15e-6,
+            "cache_read_input_token_cost": 3e-7,
+            "input_cost_per_token_above_128k_tokens": 6e-6,
+            "output_cost_per_token_above_128k_tokens": 3e-5,
+            "litellm_provider": "vertex_ai",
+            "mode": "chat",
+        },
+    )
+
+    usage = Usage(
+        prompt_tokens=10_000,
+        completion_tokens=100,
+        total_tokens=10_100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=9_000),
+    )
+
+    prompt_cost, completion_cost = cost_per_token(
+        model="vertex_ai/claude-tiered-test",
+        custom_llm_provider="vertex_ai",
+        usage=usage,
+    )
+
+    # Below the 128k threshold, so base rates apply: 1,000 fresh tokens at the input rate plus
+    # 9,000 cached tokens at the (much cheaper) cache-read rate.
+    expected_prompt_cost = (10_000 - 9_000) * 3e-6 + 9_000 * 3e-7
+    expected_completion_cost = 100 * 15e-6
+
+    assert prompt_cost == pytest.approx(expected_prompt_cost)
+    assert completion_cost == pytest.approx(expected_completion_cost)
+
+
+def test_vertex_ai_above_128k_pricing_applies_tiered_rate(monkeypatch):
+    """
+    Companion to the cache-discount regression above: once prompt_tokens exceeds the 128k
+    threshold, the tiered above-128k rate must still apply (uncached tokens only — cached
+    tokens keep billing at the cache-read rate rather than jumping to the tiered rate too).
+    """
+    from litellm.llms.vertex_ai.cost_calculator import cost_per_token
+
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "vertex_ai/claude-tiered-test-above",
+        {
+            "input_cost_per_token": 3e-6,
+            "output_cost_per_token": 15e-6,
+            "cache_read_input_token_cost": 3e-7,
+            "input_cost_per_token_above_128k_tokens": 6e-6,
+            "output_cost_per_token_above_128k_tokens": 3e-5,
+            "litellm_provider": "vertex_ai",
+            "mode": "chat",
+        },
+    )
+
+    usage = Usage(
+        prompt_tokens=200_000,
+        completion_tokens=1_000,
+        total_tokens=201_000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=50_000),
+    )
+
+    prompt_cost, completion_cost = cost_per_token(
+        model="vertex_ai/claude-tiered-test-above",
+        custom_llm_provider="vertex_ai",
+        usage=usage,
+    )
+
+    expected_prompt_cost = (200_000 - 50_000) * 6e-6 + 50_000 * 3e-7
+    expected_completion_cost = 1_000 * 3e-5
+
+    assert prompt_cost == pytest.approx(expected_prompt_cost)
+    assert completion_cost == pytest.approx(expected_completion_cost)
+
+
 # ---------------------------------------------------------------------------
 # Bug 2 — db_spend_update_writer cache token extraction helpers.
 # ---------------------------------------------------------------------------

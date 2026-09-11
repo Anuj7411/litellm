@@ -9,7 +9,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     generic_cost_per_token,
     get_vertex_regional_endpoint_uplift,
 )
-from litellm.types.utils import ModelInfo, Usage
+from litellm.types.utils import Usage
 
 """
 Gemini pricing covers: 
@@ -175,32 +175,6 @@ def cost_per_character(
     return prompt_cost * vertex_uplift, completion_cost * vertex_uplift
 
 
-def _handle_128k_pricing(
-    model_info: ModelInfo,
-    usage: Usage,
-) -> tuple[float, float]:
-    ## CALCULATE INPUT COST
-    input_cost_per_token_above_128k_tokens: Final = model_info.get("input_cost_per_token_above_128k_tokens")
-    output_cost_per_token_above_128k_tokens = model_info.get("output_cost_per_token_above_128k_tokens")
-
-    prompt_tokens: Final = usage.prompt_tokens
-    completion_tokens: Final = usage.completion_tokens
-
-    if _is_above_128k(tokens=prompt_tokens) and input_cost_per_token_above_128k_tokens is not None:
-        prompt_cost = prompt_tokens * input_cost_per_token_above_128k_tokens
-    else:
-        prompt_cost = prompt_tokens * (model_info["input_cost_per_token"] or 0.0)
-
-    ## CALCULATE OUTPUT COST
-    output_cost_per_token_above_128k_tokens = model_info.get("output_cost_per_token_above_128k_tokens")
-    if _is_above_128k(tokens=completion_tokens) and output_cost_per_token_above_128k_tokens is not None:
-        completion_cost = completion_tokens * output_cost_per_token_above_128k_tokens
-    else:
-        completion_cost = completion_tokens * (model_info["output_cost_per_token"] or 0.0)
-
-    return prompt_cost, completion_cost
-
-
 def cost_per_token(
     model: str,
     custom_llm_provider: str,
@@ -227,21 +201,11 @@ def cost_per_token(
     Raises:
         Exception if model requires >128k pricing, but model cost not mapped
     """
-
-    ## GET MODEL INFO
-    model_info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-
-    ## HANDLE 128k+ PRICING
-    input_cost_per_token_above_128k_tokens: Final = model_info.get("input_cost_per_token_above_128k_tokens")
-    output_cost_per_token_above_128k_tokens: Final = model_info.get("output_cost_per_token_above_128k_tokens")
-    if input_cost_per_token_above_128k_tokens is not None or output_cost_per_token_above_128k_tokens is not None:
-        prompt_cost_128k, completion_cost_128k = _handle_128k_pricing(
-            model_info=model_info,
-            usage=usage,
-        )
-        vertex_uplift: Final = get_vertex_regional_endpoint_uplift(model_info, vertex_location)
-        return prompt_cost_128k * vertex_uplift, completion_cost_128k * vertex_uplift
-
+    # generic_cost_per_token already resolves any input_cost_per_token_above_<N>_tokens /
+    # output_cost_per_token_above_<N>_tokens pair generically (128k included) while also
+    # discounting cached and cache-creation tokens; a model priced above 128k must keep
+    # that discount instead of billing every prompt token, cached or not, at the flat
+    # tiered rate a hand-rolled 128k-only branch used to apply here.
     return generic_cost_per_token(
         model=model,
         custom_llm_provider=custom_llm_provider,
