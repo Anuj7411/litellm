@@ -381,10 +381,16 @@ def cost_per_token(
 
     ## CUSTOM PRICING ##
     # Normalize cache token counts across providers:
-    #   - OpenAI-compatible: usage.prompt_tokens_details.cached_tokens
-    #     (prompt_tokens already INCLUDES cached_tokens)
-    #   - Anthropic: usage.cache_read_input_tokens / cache_creation_input_tokens
-    #     (prompt_tokens does NOT include these — adjust before calling helper)
+    #   - usage.prompt_tokens_details.cached_tokens/cache_creation_tokens carry the cache
+    #     split either way, so always read them for the helper's cache-rate billing.
+    #   - usage.cache_read_input_tokens / cache_creation_input_tokens additionally mean
+    #     prompt_tokens EXCLUDES cache tokens (legacy Anthropic-style usage) only when
+    #     prompt_tokens_details.text_tokens is unset. Every current transformation that
+    #     folds cache into prompt_tokens (AnthropicConfig.calculate_usage, bedrock
+    #     converse, vertex gemini, ...) sets text_tokens to the un-cached remainder in the
+    #     same breakdown; Usage.__init__'s own auto-derived cached_tokens/cache_write_tokens
+    #     from bare cache_read_input_tokens/cache_creation_input_tokens kwargs never sets
+    #     text_tokens, which is exactly the legacy shape where prompt_tokens excludes cache.
     _cache_read_tokens: float = 0
     _cache_creation_tokens: float = 0
     _is_anthropic_style = False
@@ -400,14 +406,15 @@ def cost_per_token(
                 getattr(_pt_details, "cache_write_tokens", 0) or getattr(_pt_details, "cache_creation_tokens", 0) or 0
             )
 
-        _anthropic_read: Final[int | None] = getattr(usage_object, "cache_read_input_tokens", None)
-        _anthropic_create: Final[int | None] = getattr(usage_object, "cache_creation_input_tokens", None)
-        if _anthropic_read is not None or _anthropic_create is not None:
-            _is_anthropic_style = True
-            if _anthropic_read is not None:
-                _cache_read_tokens = float(_anthropic_read)
-            if _anthropic_create is not None:
-                _cache_creation_tokens = float(_anthropic_create)
+        if _pt_details is None or getattr(_pt_details, "text_tokens", None) is None:
+            _anthropic_read: Final[int | None] = getattr(usage_object, "cache_read_input_tokens", None)
+            _anthropic_create: Final[int | None] = getattr(usage_object, "cache_creation_input_tokens", None)
+            if _anthropic_read is not None or _anthropic_create is not None:
+                _is_anthropic_style = True
+                if _anthropic_read is not None:
+                    _cache_read_tokens = float(_anthropic_read)
+                if _anthropic_create is not None:
+                    _cache_creation_tokens = float(_anthropic_create)
 
     if not _cache_read_tokens and cache_read_input_tokens:
         _cache_read_tokens = float(cache_read_input_tokens)

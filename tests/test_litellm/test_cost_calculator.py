@@ -3399,6 +3399,45 @@ def test_custom_pricing_applies_cache_read_input_cost():
     assert cost == pytest.approx(expected)
 
 
+def test_custom_pricing_does_not_double_bill_anthropic_shaped_cache_read_tokens():
+    """
+    Regression: an Anthropic /v1/messages usage object folds cache tokens into
+    prompt_tokens (AnthropicConfig.calculate_usage) but also keeps the legacy
+    top-level cache_read_input_tokens/cache_creation_input_tokens fields for
+    backward compatibility. custom_cost_per_token treated that legacy field as
+    proof that prompt_tokens excluded cache tokens and re-added them, billing
+    cache-read tokens once at the cache rate and again at the full input rate.
+    """
+    usage = litellm.AnthropicConfig().calculate_usage(
+        usage_object={
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "cache_read_input_tokens": 100_000,
+        },
+        reasoning_content=None,
+    )
+    # AnthropicConfig folds cache tokens into prompt_tokens while also keeping
+    # the legacy top-level field, which is exactly the shape that tripped the bug.
+    assert usage.prompt_tokens == 100_010
+    assert usage.cache_read_input_tokens == 100_000
+
+    prompt_cost, completion_cost = cost_per_token(
+        model="claude-x",
+        prompt_tokens=usage.prompt_tokens,
+        completion_tokens=usage.completion_tokens,
+        usage_object=usage,
+        custom_cost_per_token={
+            "input_cost_per_token": 0.000001,
+            "output_cost_per_token": 0.000001,
+            "cache_read_input_token_cost": 0.0000001,
+        },
+    )
+
+    expected_prompt_cost = 10 * 0.000001 + 100_000 * 0.0000001
+    assert prompt_cost == pytest.approx(expected_prompt_cost)
+    assert completion_cost == pytest.approx(20 * 0.000001)
+
+
 def test_custom_pricing_applies_cache_creation_input_cost_via_prompt_details():
     """
     OpenAI-compatible providers report cache-write tokens under
