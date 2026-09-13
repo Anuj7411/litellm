@@ -1964,6 +1964,47 @@ def test_vertex_uplift_composes_with_above_128k_pricing(monkeypatch):
     assert regional_completion == pytest.approx(global_completion * 1.10, rel=1e-9)
 
 
+def test_vertex_ai_above_128k_completion_cost_uses_characters_not_tokens(monkeypatch):
+    """
+    Regression: ``cost_per_character``'s above-128k branch priced the completion
+    by multiplying the per-character rate by ``usage.completion_tokens`` instead
+    of ``completion_characters``. Since roughly 4 characters make up one token,
+    this silently undercharged long, character-priced Vertex AI completions by
+    ~4x once they crossed the above-128k threshold.
+    """
+    from litellm.llms.vertex_ai.cost_calculator import cost_per_character
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    model = "fake-vertex-char-128k-completion-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "litellm_provider": "vertex_ai",
+                "mode": "chat",
+                "input_cost_per_character": 1.5e-06,
+                "output_cost_per_character": 1.5e-06,
+                "output_cost_per_character_above_128k_tokens": 3e-06,
+                "max_tokens": 200_000,
+            }
+        }
+    )
+
+    completion_characters = 40_000  # 40k chars -> 160k token-equivalent, crosses the 128k gate
+    usage = Usage(prompt_tokens=10, completion_tokens=10_000, total_tokens=10_010)
+
+    _, completion_cost = cost_per_character(
+        model=model,
+        custom_llm_provider="vertex_ai",
+        usage=usage,
+        prompt_characters=10,
+        completion_characters=completion_characters,
+    )
+
+    assert completion_cost == pytest.approx(completion_characters * 3e-06)
+
+
 def test_cost_discount_vertex_ai(monkeypatch):
     """
     Test that cost discount is applied correctly for Vertex AI provider
