@@ -10,6 +10,7 @@ from httpx._types import RequestFiles
 import litellm
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
+from litellm.llms.gemini.image_usage_transformation import transform_gemini_image_usage
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.secret_managers.main import get_secret_str
@@ -220,6 +221,10 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         ]
 
         model_response.data = cast(list[OpenAIImage], data_list)
+
+        if usage_metadata := response_json.get("usageMetadata"):
+            model_response.usage = transform_gemini_image_usage(cast(dict, usage_metadata))
+
         return model_response
 
     def _map_size_to_aspect_ratio(self, size: str) -> str:

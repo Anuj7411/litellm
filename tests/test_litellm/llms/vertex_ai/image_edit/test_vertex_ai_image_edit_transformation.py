@@ -142,6 +142,119 @@ class TestVertexAIGeminiImageEditTransformation:
                 headers={},
             )
 
+    def test_transform_image_edit_response_populates_usage_from_usage_metadata(
+        self,
+    ) -> None:
+        """
+        Regression test: the Vertex AI Gemini generateContent API always
+        returns usageMetadata, but transform_image_edit_response used to
+        discard it, so image_response.usage stayed None. That silently
+        forced every vertex_ai image-edit cost calculation onto flat
+        output_cost_per_image pricing instead of the model's real
+        per-token rates, even for token-priced models like
+        vertex_ai/gemini-3-pro-image. This asserts the usage is now
+        captured, matching the sibling vertex_ai image generation and
+        gemini image edit transformations.
+        """
+        response_payload = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "inlineData": {
+                                    "mimeType": "image/png",
+                                    "data": base64.b64encode(b"image-one").decode(
+                                        "utf-8"
+                                    ),
+                                }
+                            }
+                        ]
+                    }
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 100,
+                "candidatesTokenCount": 560,
+                "totalTokenCount": 660,
+            },
+        }
+
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.json.return_value = response_payload
+        mock_response.status_code = 200
+        mock_response.headers = {}
+
+        image_response = self.config.transform_image_edit_response(
+            model=self.model,
+            raw_response=mock_response,
+            logging_obj=self.logging_obj,
+        )
+
+        assert image_response.usage is not None
+        assert image_response.usage.input_tokens == 100
+        assert image_response.usage.output_tokens == 560
+        assert image_response.usage.total_tokens == 660
+
+    def test_image_edit_cost_uses_token_usage_not_flat_per_image_price(self) -> None:
+        """
+        Regression test for the underlying cost bug: with usageMetadata now
+        captured, vertex_ai/image_edit/cost_calculator.cost_calculator must
+        bill gemini-3-pro-image by its output_cost_per_image_token rate
+        instead of always charging the flat output_cost_per_image rate.
+        """
+        from litellm.llms.vertex_ai.image_edit.cost_calculator import (
+            cost_calculator as vertex_image_edit_cost_calculator,
+        )
+
+        response_payload = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "inlineData": {
+                                    "mimeType": "image/png",
+                                    "data": base64.b64encode(b"image-one").decode(
+                                        "utf-8"
+                                    ),
+                                }
+                            }
+                        ]
+                    }
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 100,
+                "candidatesTokenCount": 560,
+                "totalTokenCount": 660,
+            },
+        }
+
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.json.return_value = response_payload
+        mock_response.status_code = 200
+        mock_response.headers = {}
+
+        image_response = self.config.transform_image_edit_response(
+            model="vertex_ai/gemini-3-pro-image",
+            raw_response=mock_response,
+            logging_obj=self.logging_obj,
+        )
+
+        cost = vertex_image_edit_cost_calculator(
+            model="vertex_ai/gemini-3-pro-image",
+            image_response=image_response,
+        )
+
+        # Token-priced cost: 100 input tokens * input_cost_per_token
+        # + 560 output image tokens * output_cost_per_image_token,
+        # NOT the flat output_cost_per_image rate the old code always billed.
+        flat_output_cost_per_image = 0.134
+        expected_cost = 100 * 2e-06 + 560 * 0.00012
+        assert cost == pytest.approx(expected_cost)
+        assert cost != pytest.approx(flat_output_cost_per_image)
+
     def test_validate_environment_with_litellm_params(self) -> None:
         """Test validate_environment uses credentials from litellm_params"""
         with patch.object(
