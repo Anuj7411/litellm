@@ -144,9 +144,12 @@ class AmazonStabilityConfig:
         _steps: Final = optional_params.get("steps", 50)
         steps: Final = "max-steps" if _steps > 50 else "50-steps"
 
-        # size is stored in model_prices_and_context_window.json as 1024-x-1024
-        # current size has 1024x1024
+        # model_prices_and_context_window.json keys sizes as "1024-x-1024", but callers
+        # pass the OpenAI-style "1024x1024" (e.g. from a user-supplied `size` param), so
+        # that shape must be normalized or the pricing lookup below raises for a mapped model.
         size = size or "1024-x-1024"
+        if "x" in size and "-x-" not in size:
+            size = size.replace("x", "-x-")
         model = f"{size}/{steps}/{model}"
 
         get_model_info: Final = get_cached_model_info()
