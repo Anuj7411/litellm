@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 from typing import Final
+from unittest.mock import patch
 
 import pytest
 
@@ -9,11 +10,13 @@ import pytest
 from pydantic import BaseModel
 
 import litellm
+from litellm.constants import DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND
 from litellm.cost_calculator import (
     BaseTokenUsageProcessor,
     RealtimeAPITokenUsageProcessor,
     completion_cost,
     cost_per_token,
+    get_replicate_completion_pricing,
     handle_realtime_stream_cost_calculation,
     response_cost_calculator,
 )
@@ -5071,3 +5074,29 @@ def test_completion_cost_ocr_ignores_deployment_pricing_without_custom_pricing_f
         litellm_logging_obj=logging_obj,
     )
     assert cost == 0.0
+
+
+def test_get_replicate_completion_pricing_recomputed_duration_is_in_seconds():
+    """
+    Regression: when the caller doesn't supply `total_time`, get_replicate_completion_pricing
+    recomputes it from the response's own `created`/`ended` timestamps, which are Unix seconds.
+    The final return statement then divided that seconds-based duration by 1000 as though it
+    were milliseconds, undercounting every unmapped Replicate model's cost by 1000x.
+    """
+    now: Final = 1_700_000_000.0
+    elapsed_seconds: Final = 10.0
+    completion_response = {"created": now - elapsed_seconds}
+
+    with patch("litellm.cost_calculator.time.time", return_value=now):
+        cost = get_replicate_completion_pricing(completion_response)
+
+    assert cost == pytest.approx(DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND * elapsed_seconds)
+
+
+def test_get_replicate_completion_pricing_honors_caller_supplied_ms_duration():
+    """A caller-supplied total_time is in ms and must still be divided by 1000."""
+    total_time_ms: Final = 10_000.0
+
+    cost = get_replicate_completion_pricing({}, total_time=total_time_ms)
+
+    assert cost == pytest.approx(DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND * 10.0)

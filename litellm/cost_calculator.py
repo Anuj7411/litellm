@@ -728,16 +728,18 @@ def cost_per_token(
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
 
 
-def get_replicate_completion_pricing(completion_response: dict, total_time=0.0):
+def get_replicate_completion_pricing(completion_response: dict, total_time: float | None = 0.0) -> float:
     # see https://replicate.com/pricing
     # for all litellm currently supported LLMs, almost all requests go to a100_80gb
     a100_80gb_price_per_second_public: Final = (
         DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND  # assume all calls sent to A100 80GB for now
     )
-    if total_time == 0.0:  # total time is in ms
+    if not total_time:
+        # No caller-supplied duration: derive it from the response's own timestamps, which are
+        # Unix seconds (`created` is set via `int(time.time())`), not the ms `total_time` expects.
         start_time: Final = completion_response.get("created", time.time())
         end_time: Final = getattr(completion_response, "ended", time.time())
-        total_time = end_time - start_time
+        return a100_80gb_price_per_second_public * (end_time - start_time)
 
     return a100_80gb_price_per_second_public * total_time / 1000
 
