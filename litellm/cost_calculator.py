@@ -1262,6 +1262,13 @@ def completion_cost(
         - For un-mapped Replicate models, the cost is calculated based on the total time used for the request.
     """
     try:
+        # `total_time` is documented above in seconds, and real callers (e.g. the
+        # litellm.max_budget tracker in litellm_core_utils/litellm_logging.py) supply it
+        # that way. Every downstream consumer (get_replicate_completion_pricing,
+        # cost_per_token's response_time_ms path) expects milliseconds, so normalize once
+        # here; the completion_response branch below overwrites this with the
+        # already-millisecond `_response_ms` field whenever one is available.
+        total_time = (total_time or 0.0) * 1000
         call_type = _infer_call_type(call_type, completion_response) or "completion"
 
         if (

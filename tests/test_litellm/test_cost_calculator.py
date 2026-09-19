@@ -5071,3 +5071,42 @@ def test_completion_cost_ocr_ignores_deployment_pricing_without_custom_pricing_f
         litellm_logging_obj=logging_obj,
     )
     assert cost == 0.0
+
+
+def test_completion_cost_replicate_unmapped_model_bills_total_time_as_seconds():
+    """Regression test: completion_cost()'s `total_time` param is documented (and
+
+    supplied by real callers, e.g. the litellm.max_budget tracker in
+    litellm_core_utils/litellm_logging.py, which passes `(end_time -
+    start_time).total_seconds()`) in seconds. Without a `completion_response`,
+    get_replicate_completion_pricing() used to divide that value by 1000 as if it
+    were already milliseconds, undercharging by 1000x.
+    """
+    price_per_second: Final = 0.0014  # a100_80gb_price_per_second_public
+
+    cost = completion_cost(
+        model="replicate/totally-unmapped-regression-test-model",
+        total_time=12.5,
+        messages=[{"role": "user", "content": "hi"}],
+        completion="hello",
+    )
+
+    assert cost == pytest.approx(price_per_second * 12.5, rel=1e-9)
+
+
+def test_completion_cost_custom_cost_per_second_bills_total_time_as_seconds():
+    """Regression test: the documented `custom_cost_per_second` path has the same
+
+    total_time-unit bug as the Replicate path (see
+    test_completion_cost_replicate_unmapped_model_bills_total_time_as_seconds).
+    """
+    cost = completion_cost(
+        model="my-custom-time-priced-model",
+        custom_llm_provider="openai",
+        prompt="hi",
+        completion="hello there",
+        total_time=10.0,
+        custom_cost_per_second=0.01,
+    )
+
+    assert cost == pytest.approx(0.01 * 10.0, rel=1e-9)
