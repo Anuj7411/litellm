@@ -1555,6 +1555,54 @@ def test_generic_cost_per_token_tier_without_a_1hr_cache_rate_bills_the_tier_cac
         litellm.model_cost.pop(model, None)
 
 
+def test_generic_cost_per_token_tier_with_an_explicit_zero_1hr_cache_rate_bills_it_free():
+    model = "litellm-test-tiered-explicit-zero-1hr-cache-rate"
+    custom_llm_provider = "openrouter"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": custom_llm_provider,
+                "mode": "chat",
+                "tiered_pricing": [
+                    {
+                        "range": [0, 128000],
+                        "input_cost_per_token": 7e-07,
+                        "output_cost_per_token": 3.5e-06,
+                        "cache_creation_input_token_cost": 8.75e-07,
+                        "cache_creation_input_token_cost_above_1hr": 0.0,
+                    }
+                ],
+            }
+        }
+    )
+
+    try:
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=10,
+            total_tokens=1010,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cache_creation_tokens=800,
+                cache_creation_token_details=CacheCreationTokenDetails(
+                    ephemeral_5m_input_tokens=300, ephemeral_1h_input_tokens=500
+                ),
+            ),
+        )
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        # The tier prices 1hr cache writes at an explicit 0.0, so only the 5m
+        # cache-write tokens and the non-cached text tokens are billable.
+        expected_prompt = (200 * 7e-07) + (300 * 8.75e-07) + (500 * 0.0)
+        assert round(prompt_cost, 12) == round(expected_prompt, 12)
+        assert round(completion_cost, 12) == round(10 * 3.5e-06, 12)
+    finally:
+        litellm.model_cost.pop(model, None)
+
+
 def test_generic_cost_per_token_tier_without_an_input_rate_is_not_a_priced_tier():
     model = "litellm-test-tiered-no-input-rate"
     custom_llm_provider = "openrouter"
