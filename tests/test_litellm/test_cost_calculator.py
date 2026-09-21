@@ -2345,6 +2345,51 @@ def test_cost_margin_with_discount(monkeypatch):
     print(f"  - Expected: ${expected_cost:.6f}")
 
 
+def test_cost_margin_applied_to_image_generation(monkeypatch):
+    """
+    Regression test: cost_margin_config/cost_discount_config must also apply to
+    image generation, not just chat completions.
+
+    completion_cost() returns early for image generation with the raw calculator
+    output, bypassing _apply_cost_discount()/_apply_cost_margin() entirely - so a
+    configured margin silently had no effect on image spend while still applying
+    correctly to chat completions.
+    """
+    from litellm import completion_cost
+    from litellm.types.utils import ImageObject, ImageResponse
+
+    response = ImageResponse(
+        created=1234567890,
+        data=[ImageObject(url="https://example.com/generated-image.png")],
+        quality="standard",
+        size="1024x1024",
+    )
+
+    monkeypatch.setattr(litellm, "cost_margin_config", {})
+    cost_without_margin = completion_cost(
+        completion_response=response,
+        model="dall-e-3",
+        custom_llm_provider="openai",
+        call_type="image_generation",
+        quality="standard",
+        size="1024x1024",
+    )
+    assert cost_without_margin > 0
+
+    monkeypatch.setattr(litellm, "cost_margin_config", {"openai": 0.10})
+    cost_with_margin = completion_cost(
+        completion_response=response,
+        model="dall-e-3",
+        custom_llm_provider="openai",
+        call_type="image_generation",
+        quality="standard",
+        size="1024x1024",
+    )
+
+    expected_cost = cost_without_margin * 1.10
+    assert cost_with_margin == pytest.approx(expected_cost, rel=1e-9)
+
+
 def test_azure_image_generation_cost_calculator():
     from unittest.mock import MagicMock
 

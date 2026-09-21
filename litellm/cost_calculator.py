@@ -1438,7 +1438,7 @@ def completion_cost(
                     completion_response, ImageResponse
                 ):
                     ### IMAGE GENERATION COST CALCULATION ###
-                    return CostCalculatorUtils.route_image_generation_cost_calculator(
+                    _image_cost = CostCalculatorUtils.route_image_generation_cost_calculator(
                         model=model,
                         custom_llm_provider=custom_llm_provider,
                         completion_response=completion_response,
@@ -1448,6 +1448,15 @@ def completion_cost(
                         optional_params=optional_params,
                         call_type=call_type,
                     )
+                    _image_cost, _, _ = _apply_cost_discount(
+                        base_cost=_image_cost,
+                        custom_llm_provider=custom_llm_provider,
+                    )
+                    _image_cost, _, _, _ = _apply_cost_margin(
+                        base_cost=_image_cost,
+                        custom_llm_provider=custom_llm_provider,
+                    )
+                    return _image_cost
                 elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###
                     _video_model_info: ModelInfo | None = _deployment_model_info(
