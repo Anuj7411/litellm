@@ -560,6 +560,20 @@ def test_together_ai_qwen_completion_cost():
     assert response == "together-ai-41.1b-80b"
 
 
+def test_together_ai_moe_model_billed_on_total_params():
+    """
+    Regression: a mixture-of-experts model name like "8x7b" names one expert's
+    size, not the model's total parameters. Pricing it off the last <n>b group
+    alone (7B) picks a much cheaper tier than the model's real total size
+    (8 experts * 7B = 56B), undercharging for any unregistered MoE deployment.
+    """
+    response = litellm.cost_calculator.get_model_params_and_category(
+        model_name="mistralai/Mixtral-8x7B-Instruct-v0.1", call_type=CallTypes.completion
+    )
+
+    assert response == "together-ai-41.1b-80b"
+
+
 @pytest.mark.parametrize("provider", ["gemini"])
 def test_gemini_completion_cost(provider):
     """

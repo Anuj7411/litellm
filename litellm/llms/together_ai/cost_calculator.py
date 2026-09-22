@@ -25,6 +25,22 @@ def has_together_registry_pricing(model: str, cost_map: Mapping[str, object]) ->
     return isinstance(entry, Mapping) and "input_cost_per_token" in entry
 
 
+def _category_for_params_billion(params_billion: float) -> str | None:
+    if params_billion <= TOGETHER_AI_4_B:
+        return "together-ai-up-to-4b"
+    elif params_billion <= TOGETHER_AI_8_B:
+        return "together-ai-4.1b-8b"
+    elif params_billion <= TOGETHER_AI_21_B:
+        return "together-ai-8.1b-21b"
+    elif params_billion <= TOGETHER_AI_41_B:
+        return "together-ai-21.1b-41b"
+    elif params_billion <= TOGETHER_AI_80_B:
+        return "together-ai-41.1b-80b"
+    elif params_billion <= TOGETHER_AI_110_B:
+        return "together-ai-81.1b-110b"
+    return None
+
+
 # Extract the number of billion parameters from the model name
 # only used for together_computer LLMs
 def get_model_params_and_category(model_name, call_type: CallTypes) -> str:
@@ -37,8 +53,18 @@ def get_model_params_and_category(model_name, call_type: CallTypes) -> str:
     if call_type == CallTypes.embedding or call_type == CallTypes.aembedding:
         return get_model_params_and_category_embeddings(model_name=model_name)
     model_name = model_name.lower()
+
+    # Mixture-of-experts models (e.g. "8x22b") are billed on their total parameter
+    # count - experts * size per expert - not the last <n>b group in the name, which
+    # names only one expert's size and understates the model by the expert count
+    moe_match: Final = re.search(r"(\d+)x(\d+)b", model_name)
+    if moe_match is not None:
+        category = _category_for_params_billion(int(moe_match.group(1)) * int(moe_match.group(2)))
+        if category is not None:
+            return category
+        return model_name
+
     re_params_match: Final = re.search(r"(\d+b)", model_name)  # catch all decimals like 3b, 70b, etc
-    category = None
     if re_params_match is not None:
         params_match = str(re_params_match.group(1))
         params_match = params_match.replace("b", "")
@@ -46,19 +72,7 @@ def get_model_params_and_category(model_name, call_type: CallTypes) -> str:
             params_billion: Final = float(params_match)
         else:
             return model_name
-        # Determine the category based on the number of parameters
-        if params_billion <= TOGETHER_AI_4_B:
-            category = "together-ai-up-to-4b"
-        elif params_billion <= TOGETHER_AI_8_B:
-            category = "together-ai-4.1b-8b"
-        elif params_billion <= TOGETHER_AI_21_B:
-            category = "together-ai-8.1b-21b"
-        elif params_billion <= TOGETHER_AI_41_B:
-            category = "together-ai-21.1b-41b"
-        elif params_billion <= TOGETHER_AI_80_B:
-            category = "together-ai-41.1b-80b"
-        elif params_billion <= TOGETHER_AI_110_B:
-            category = "together-ai-81.1b-110b"
+        category = _category_for_params_billion(params_billion)
         if category is not None:
             return category
 
