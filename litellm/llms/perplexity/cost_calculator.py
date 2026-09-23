@@ -106,10 +106,11 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
     if num_search_queries > 0 and search_cost_value is not None:
         # Handle both dict and float formats
         if isinstance(search_cost_value, dict):
-            # search_context_cost_per_query stores the per-request price in USD
-            # (e.g. sonar low = $0.005/request). Use it directly, matching the
-            # gemini cost calculator which reads the same field per request.
-            search_cost_per_query = _safe_float_cast(search_cost_value.get("search_context_size_low", 0))
+            # The request's actual search_context_size never reaches this fallback, so
+            # price at the medium tier: that's the documented default search_context_size
+            # for Perplexity/OpenAI-style web search when a request doesn't set one, and
+            # matches the same fallback in the gemini/groq/xai cost calculators.
+            search_cost_per_query = _safe_float_cast(search_cost_value.get("search_context_size_medium", 0))
         else:
             search_cost_per_query = _safe_float_cast(search_cost_value)
         search_cost: Final = num_search_queries * search_cost_per_query

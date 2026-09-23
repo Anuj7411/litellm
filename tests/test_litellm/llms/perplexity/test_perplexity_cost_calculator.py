@@ -127,6 +127,39 @@ class TestPerplexityCostCalculator:
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
 
+    def test_search_queries_bill_at_the_medium_tier_when_size_is_unknown(self):
+        """The fallback calculator has no visibility into the request's actual
+        search_context_size, so it must not silently bill the cheapest ("low") tier.
+        Medium is Perplexity/OpenAI's documented default search_context_size and is
+        what the gemini/groq/xai cost calculators fall back to as well; billing "low"
+        here underbills every request that used the default or a "high" context size.
+        """
+        litellm.model_cost["perplexity/sonar-tiered-search-test"] = {
+            "litellm_provider": "perplexity",
+            "mode": "chat",
+            "input_cost_per_token": 2e-06,
+            "output_cost_per_token": 8e-06,
+            "search_context_cost_per_query": {
+                "search_context_size_low": 0.005,
+                "search_context_size_medium": 0.010,
+                "search_context_size_high": 0.014,
+            },
+        }
+        usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=3),
+        )
+
+        prompt_cost, completion_cost = perplexity_cost_per_token(model="sonar-tiered-search-test", usage=usage)
+
+        expected_prompt_cost = 100 * 2e-6
+        expected_completion_cost = (50 * 8e-6) + (3 * 0.010)
+
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
+
     def test_reasoning_tokens_from_direct_attribute(self):
         """Test reasoning tokens cost calculation from direct attribute."""
         usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
@@ -492,7 +525,7 @@ class TestPerplexityCostCalculator:
             "output_cost_per_token": 1e-06,
             "output_cost_per_reasoning_token": 3e-06,
             "citation_cost_per_token": 2e-06,
-            "search_context_cost_per_query": {"search_context_size_low": 0.005},
+            "search_context_cost_per_query": {"search_context_size_medium": 0.005},
             "off_peak_pricing": off_peak_pricing,
         }
 
