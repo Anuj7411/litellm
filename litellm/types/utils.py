@@ -251,6 +251,17 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     ]  # only for vertex ai models
     output_cost_per_image: Optional[float]
     output_cost_per_image_token: Optional[float]
+    output_cost_per_image_premium_image: Optional[
+        float
+    ]  # Bedrock Titan Image Generator: premium-quality output
+    output_cost_per_image_above_512_and_512_pixels: Optional[
+        float
+    ]  # Bedrock Titan Image Generator v1: output above 512x512 pixels
+    output_cost_per_image_above_512_and_512_pixels_and_premium_image: Optional[float]
+    output_cost_per_image_above_1024_and_1024_pixels: Optional[
+        float
+    ]  # Bedrock Titan Image Generator v2: output above 1024x1024 pixels
+    output_cost_per_image_above_1024_and_1024_pixels_and_premium_image: Optional[float]
     output_vector_size: Optional[int]
     output_cost_per_reasoning_token: Optional[float]
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models

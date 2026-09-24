@@ -2,8 +2,9 @@
 Transformation logic for Amazon Titan Image Generation.
 """
 
+import re
 import types
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from openai.types.image import Image
 
@@ -14,6 +15,10 @@ from litellm.types.llms.bedrock import (
     AmazonTitanTextToImageParams,
 )
 from litellm.types.utils import ImageResponse
+
+PIXEL_TIER_COST_FIELD_PATTERN = re.compile(
+    r"output_cost_per_image_above_(\d+)_and_(\d+)_pixels$"
+)
 
 
 class AmazonTitanImageGenerationConfig:
@@ -145,6 +150,58 @@ class AmazonTitanImageGenerationConfig:
         return model_response
 
     @classmethod
+    def _get_requested_dimensions(
+        cls, size: Optional[str], image_generation_config: dict
+    ) -> Optional[Tuple[int, int]]:
+        width = image_generation_config.get("width")
+        height = image_generation_config.get("height")
+        if width is not None and height is not None:
+            return width, height
+        if size:
+            try:
+                str_width, str_height = size.split("x")
+                return int(str_width), int(str_height)
+            except ValueError:
+                return None
+        return None
+
+    @classmethod
+    def _resolve_cost_field(
+        cls, model_info: dict, size: Optional[str], optional_params: Optional[dict]
+    ) -> str:
+        """
+        Titan bills a higher rate for premium quality, and again once the image exceeds the
+        model's pixel threshold (512x512 for v1, 1024x1024 for v2) - see the `output_cost_per_image_*`
+        fields for these models in model_prices_and_context_window.json.
+        """
+        image_generation_config = (optional_params or {}).get(
+            "imageGenerationConfig"
+        ) or {}
+        is_premium = image_generation_config.get("quality") == "premium"
+        dimensions = cls._get_requested_dimensions(size, image_generation_config)
+
+        if dimensions is not None:
+            width, height = dimensions
+            for field_name, field_value in model_info.items():
+                if field_value is None:
+                    continue
+                match = PIXEL_TIER_COST_FIELD_PATTERN.fullmatch(field_name)
+                if not match:
+                    continue
+                if width > int(match.group(1)) and height > int(match.group(2)):
+                    premium_field_name = f"{field_name}_and_premium_image"
+                    if is_premium and model_info.get(premium_field_name) is not None:
+                        return premium_field_name
+                    return field_name
+
+        if (
+            is_premium
+            and model_info.get("output_cost_per_image_premium_image") is not None
+        ):
+            return "output_cost_per_image_premium_image"
+        return "output_cost_per_image"
+
+    @classmethod
     def cost_calculator(
         cls,
         model: str,
@@ -152,9 +209,10 @@ class AmazonTitanImageGenerationConfig:
         size: Optional[str] = None,
         optional_params: Optional[dict] = None,
     ) -> float:
-        model_info = get_model_info(model=model)
-        output_cost_per_image = model_info.get("output_cost_per_image") or 0.0
         if not image_response.data:
             return 0.0
+        model_info = get_model_info(model=model)
+        cost_field = cls._resolve_cost_field(model_info, size, optional_params)
+        output_cost_per_image = model_info.get(cost_field) or 0.0
         num_images = len(image_response.data)
         return output_cost_per_image * num_images

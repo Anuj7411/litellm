@@ -6127,6 +6127,23 @@ def _get_model_info_helper(  # noqa: PLR0915
                 output_cost_per_image_token=_model_info.get(
                     "output_cost_per_image_token", None
                 ),
+                output_cost_per_image_premium_image=_model_info.get(
+                    "output_cost_per_image_premium_image", None
+                ),
+                output_cost_per_image_above_512_and_512_pixels=_model_info.get(
+                    "output_cost_per_image_above_512_and_512_pixels", None
+                ),
+                output_cost_per_image_above_512_and_512_pixels_and_premium_image=_model_info.get(
+                    "output_cost_per_image_above_512_and_512_pixels_and_premium_image",
+                    None,
+                ),
+                output_cost_per_image_above_1024_and_1024_pixels=_model_info.get(
+                    "output_cost_per_image_above_1024_and_1024_pixels", None
+                ),
+                output_cost_per_image_above_1024_and_1024_pixels_and_premium_image=_model_info.get(
+                    "output_cost_per_image_above_1024_and_1024_pixels_and_premium_image",
+                    None,
+                ),
                 output_vector_size=_model_info.get("output_vector_size", None),
                 citation_cost_per_token=_model_info.get(
                     "citation_cost_per_token", None
