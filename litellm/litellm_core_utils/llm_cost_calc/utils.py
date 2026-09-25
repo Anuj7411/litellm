@@ -1939,9 +1939,8 @@ class CostCalculatorUtils:
             cost_calculator as vertex_ai_image_cost_calculator,
         )
 
-        resolved_size: Final = (
-            size or completion_response.size or _requested_image_size(optional_params) or "1024-x-1024"
-        )
+        requested_size: Final = size or completion_response.size or _requested_image_size(optional_params)
+        resolved_size: Final = requested_size or "1024-x-1024"
         resolved_quality: Final = (
             quality or completion_response.quality or _requested_image_param(optional_params, "quality") or "standard"
         )
@@ -1957,9 +1956,13 @@ class CostCalculatorUtils:
                 )
         elif custom_llm_provider == litellm.LlmProviders.BEDROCK.value:
             if isinstance(completion_response, ImageResponse):
+                # Bedrock's own cost_calculator resolves a model-specific default size
+                # (e.g. stability.stable-diffusion-xl-v0 prices only 512-x-512, not the
+                # 1024-x-1024 this function otherwise defaults to for OpenAI-style providers),
+                # so it must see an unset size rather than that default.
                 return bedrock_image_cost_calculator(
                     model=model,
-                    size=resolved_size,
+                    size=requested_size,
                     image_response=completion_response,
                     optional_params=optional_params,
                 )

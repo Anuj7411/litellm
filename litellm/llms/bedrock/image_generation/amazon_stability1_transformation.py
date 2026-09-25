@@ -8,6 +8,12 @@ from openai.types.image import Image
 from litellm.llms.bedrock.common_utils import get_cached_model_info
 from litellm.types.utils import ImageResponse
 
+# stability.stable-diffusion-xl-v0's only priced size buckets in
+# model_prices_and_context_window.json are 512-x-512 and max-x-max; v1 (and any
+# other legacy stability engine) is only priced at 1024-x-1024.
+_STABILITY_XL_V0_DEFAULT_SIZE: Final = "512-x-512"
+_STABILITY_DEFAULT_SIZE: Final = "1024-x-1024"
+
 
 class AmazonStabilityConfig:
     """
@@ -144,9 +150,11 @@ class AmazonStabilityConfig:
         _steps: Final = optional_params.get("steps", 50)
         steps: Final = "max-steps" if _steps > 50 else "50-steps"
 
-        # size is stored in model_prices_and_context_window.json as 1024-x-1024
-        # current size has 1024x1024
-        size = size or "1024-x-1024"
+        # size is stored in model_prices_and_context_window.json as e.g. 1024-x-1024
+        default_size: Final = (
+            _STABILITY_XL_V0_DEFAULT_SIZE if "stable-diffusion-xl-v0" in model else _STABILITY_DEFAULT_SIZE
+        )
+        size = size or default_size
         model = f"{size}/{steps}/{model}"
 
         get_model_info: Final = get_cached_model_info()
