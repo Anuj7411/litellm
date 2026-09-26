@@ -37,15 +37,12 @@ def get_model_params_and_category(model_name, call_type: CallTypes) -> str:
     if call_type == CallTypes.embedding or call_type == CallTypes.aembedding:
         return get_model_params_and_category_embeddings(model_name=model_name)
     model_name = model_name.lower()
-    re_params_match: Final = re.search(r"(\d+b)", model_name)  # catch all decimals like 3b, 70b, etc
+    # The parameter count itself may be a decimal (e.g. "solar-10.7b"), so the digits
+    # before the decimal point must be captured too, not just the ones touching the "b".
+    re_params_match: Final = re.search(r"(\d+(?:\.\d+)?)b", model_name)
     category = None
     if re_params_match is not None:
-        params_match = str(re_params_match.group(1))
-        params_match = params_match.replace("b", "")
-        if params_match is not None:
-            params_billion: Final = float(params_match)
-        else:
-            return model_name
+        params_billion: Final = float(re_params_match.group(1))
         # Determine the category based on the number of parameters
         if params_billion <= TOGETHER_AI_4_B:
             category = "together-ai-up-to-4b"

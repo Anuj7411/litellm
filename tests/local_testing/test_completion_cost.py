@@ -515,6 +515,26 @@ def test_together_ai_qwen_completion_cost():
     assert response == "together-ai-41.1b-80b"
 
 
+def test_together_ai_decimal_parameter_count_category():
+    r"""
+    get_model_params_and_category() picked the pricing bucket with
+    re.search(r"(\d+)b", model_name), which only captures the digits touching the
+    "b" and drops any decimal prefix. For a model named with a decimal parameter
+    count (e.g. SOLAR-10.7B, a real together_ai/fireworks_ai-hosted model family),
+    "10.7b" matched as just "7b", so a 10.7B model was priced as if it were 7B and
+    landed one bucket lower than its real size warrants.
+
+    together-ai-4.1b-8b tops out at 8B and together-ai-8.1b-21b starts above that,
+    so a correct parse of 10.7B must land in the 8.1b-21b bucket, not 4.1b-8b.
+    """
+    response = litellm.cost_calculator.get_model_params_and_category(
+        model_name="NousResearch/Nous-Hermes-2-SOLAR-10.7B",
+        call_type=CallTypes.completion,
+    )
+
+    assert response == "together-ai-8.1b-21b"
+
+
 @pytest.mark.parametrize("provider", ["gemini"])
 def test_gemini_completion_cost(provider):
     """
