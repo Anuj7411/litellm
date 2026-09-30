@@ -6,12 +6,21 @@ Helper util for handling perplexity-specific cost calculation
 from datetime import datetime
 from typing import Final
 
+from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
+    StandardBuiltInToolCostTracking,
+)
 from litellm.litellm_core_utils.llm_cost_calc.utils import TokenRates, apply_off_peak_pricing
+from litellm.types.llms.openai import WebSearchOptions
 from litellm.types.utils import Usage
 from litellm.utils import get_model_info
 
 
-def cost_per_token(model: str, usage: Usage, current_time: datetime | None = None) -> tuple[float, float]:
+def cost_per_token(
+    model: str,
+    usage: Usage,
+    current_time: datetime | None = None,
+    web_search_options: WebSearchOptions | None = None,
+) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
     The manual fallback swaps in the model's off_peak_pricing rates while one of its windows is open.
@@ -20,6 +29,8 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
         - model: str, the model name without provider prefix
         - usage: LiteLLM Usage block, containing perplexity-specific usage information
         - current_time: the moment the request is billed at; defaults to now, UTC
+        - web_search_options: the request's `web_search_options`, used to bill the search
+          queries at the requested `search_context_size` tier instead of always "low"
 
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
@@ -104,12 +115,13 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
         "search_context_cost_per_query"
     )
     if num_search_queries > 0 and search_cost_value is not None:
-        # Handle both dict and float formats
         if isinstance(search_cost_value, dict):
-            # search_context_cost_per_query stores the per-request price in USD
-            # (e.g. sonar low = $0.005/request). Use it directly, matching the
-            # gemini cost calculator which reads the same field per request.
-            search_cost_per_query = _safe_float_cast(search_cost_value.get("search_context_size_low", 0))
+            # search_context_cost_per_query prices vary by the request's
+            # search_context_size (low/medium/high); resolve the same way
+            # StandardBuiltInToolCostTracking does for OpenAI-style web search.
+            search_cost_per_query = StandardBuiltInToolCostTracking.get_cost_for_web_search(
+                web_search_options=web_search_options, model_info=model_info
+            )
         else:
             search_cost_per_query = _safe_float_cast(search_cost_value)
         search_cost: Final = num_search_queries * search_cost_per_query

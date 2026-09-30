@@ -153,7 +153,12 @@ class TestPerplexityCostCalculator:
             "output_cost_per_token": 1e-06,
             "output_cost_per_reasoning_token": 3e-06,
             "citation_cost_per_token": 2e-06,
-            "search_context_cost_per_query": {"search_context_size_low": 0.005},
+            # All three tiers, matching how every real Perplexity model prices this field.
+            "search_context_cost_per_query": {
+                "search_context_size_low": 0.005,
+                "search_context_size_medium": 0.005,
+                "search_context_size_high": 0.005,
+            },
             "off_peak_pricing": off_peak_pricing,
         }
 
@@ -216,6 +221,41 @@ class TestPerplexityCostCalculator:
 
         assert math.isclose(prompt_cost, 1000 * 1e-07, rel_tol=1e-10)
         assert math.isclose(completion_cost, 200 * 2e-07, rel_tol=1e-10)
+
+    def test_search_cost_uses_requested_context_size_not_always_low(self):
+        """
+        Regression: the manual fallback (used whenever Perplexity's response omits
+        usage.cost.total_cost) always billed the "low" search_context_size tier,
+        regardless of the web_search_options.search_context_size the caller actually
+        requested. For sonar-pro that undercounts a "high" search by more than half
+        ($0.006 vs $0.014 per query).
+        """
+        usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=1),
+        )
+
+        _, low_cost = perplexity_cost_per_token(
+            model="sonar-pro", usage=usage, web_search_options={"search_context_size": "low"}
+        )
+        _, medium_cost = perplexity_cost_per_token(
+            model="sonar-pro", usage=usage, web_search_options={"search_context_size": "medium"}
+        )
+        _, high_cost = perplexity_cost_per_token(
+            model="sonar-pro", usage=usage, web_search_options={"search_context_size": "high"}
+        )
+        _, default_cost = perplexity_cost_per_token(model="sonar-pro", usage=usage, web_search_options=None)
+
+        # completion_cost only; prompt_cost (discarded above) carries no search fee.
+        base_completion_cost = 50 * 1.5e-05
+
+        assert math.isclose(low_cost, base_completion_cost + 0.006, rel_tol=1e-10)
+        assert math.isclose(medium_cost, base_completion_cost + 0.01, rel_tol=1e-10)
+        assert math.isclose(high_cost, base_completion_cost + 0.014, rel_tol=1e-10)
+        # No search_context_size specified defaults to "medium", per Perplexity/OpenAI docs.
+        assert math.isclose(default_cost, medium_cost, rel_tol=1e-10)
 
     def test_provider_stated_cost_still_wins_inside_an_off_peak_window(self):
         """A response that carries Perplexity's own metered cost bills that cost whatever the
