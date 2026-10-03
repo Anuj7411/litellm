@@ -495,6 +495,82 @@ def test_web_search_call_count_reads_dict_output_items(local_model_cost_map):
     )
 
 
+def _openai_responses_with_file_search_calls(model, num_calls):
+    output = [
+        {
+            "id": f"fs_{i}",
+            "type": "file_search_call",
+            "status": "completed",
+            "queries": ["query"],
+        }
+        for i in range(num_calls)
+    ]
+    return ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        model=model,
+        object="response",
+        output=output,
+        parallel_tool_calls=False,
+        tool_choice="auto",
+        tools=[],
+    )
+
+
+def test_openai_responses_file_search_multiplied_by_call_count():
+    """
+    Regression: file_search_call detection was binary (did the response include at least one
+    file_search_call), so a Responses output with multiple file searches was charged the same
+    flat $2.50/1k-calls rate as a response with only one. N file searches must bill N times,
+    mirroring the fix already applied to web search's per-call counting.
+    """
+    from litellm.types.utils import Usage
+
+    model = "gpt-4"
+    per_call = 0.0025  # $2.50 / 1000 calls
+    usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    standard_built_in_tools_params = StandardBuiltInToolsParams(
+        file_search=FileSearchTool(type="file_search")
+    )
+
+    for num_calls in (1, 3):
+        response = _openai_responses_with_file_search_calls(model, num_calls=num_calls)
+        cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+            model=model,
+            response_object=response,
+            usage=usage,
+            custom_llm_provider="openai",
+            standard_built_in_tools_params=standard_built_in_tools_params,
+        )
+        assert cost == pytest.approx(num_calls * per_call), (
+            f"{num_calls} file searches must bill {num_calls} x ${per_call}, got ${cost}"
+        )
+
+
+def test_azure_file_search_storage_cost_not_multiplied_by_call_count():
+    """
+    Azure's file search fee is storage-based (GB/day), not per-call, so it must not scale with
+    the number of file_search_call items in the response.
+    """
+    model = "azure/gpt-4"
+    response = _openai_responses_with_file_search_calls(model, num_calls=3)
+    file_search_usage = FileSearchTool(type="file_search")
+    file_search_usage["storage_gb"] = 2.0  # type: ignore[typeddict-unknown-key]
+    file_search_usage["days"] = 1.0  # type: ignore[typeddict-unknown-key]
+    standard_built_in_tools_params = StandardBuiltInToolsParams(file_search=file_search_usage)
+
+    from litellm.constants import AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY
+
+    cost = StandardBuiltInToolCostTracking._handle_file_search_cost(
+        model=model,
+        custom_llm_provider="azure",
+        standard_built_in_tools_params=standard_built_in_tools_params,
+        response_object=response,
+    )
+
+    assert cost == pytest.approx(2.0 * 1.0 * AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY)
+
+
 # Note: File search integration test removed due to complex annotation detection logic
 # The unit tests in test_azure_assistant_cost_tracking.py provide comprehensive coverage
 
