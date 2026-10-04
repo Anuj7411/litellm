@@ -70,9 +70,10 @@ def cost_per_token(
     """
     Calculate the cost per token for Azure AI models.
 
-    For Azure AI Foundry Model Router:
-    - Adds a flat cost of $0.14 per million input tokens (from model_prices_and_context_window.json)
-    - Plus the cost of the actual model used (handled by generic_cost_per_token)
+    This returns only the cost of the underlying model, i.e. what generic_cost_per_token
+    computes. The Azure AI Foundry Model Router flat infrastructure fee is NOT included here;
+    it is calculated separately via AzureModelRouterConfig.calculate_additional_costs and added
+    once by completion_cost's _get_additional_costs step, so it is never double counted.
 
     Args:
         model: str, the model name without provider prefix (from response)
@@ -85,53 +86,33 @@ def cost_per_token(
 
     Raises:
         ValueError: If the model is not found in the cost map and cost cannot be calculated
-            (except for Model Router models where we return just the routing flat cost)
+            (except for Model Router models where we return 0 cost, since the flat routing
+            cost is accounted for elsewhere)
     """
-    prompt_cost = 0.0
-    completion_cost = 0.0
-
-    # Determine if this was a model router request
-    # Check both the response model and the request model
-    is_router_request = _is_azure_model_router(model) or (
-        request_model is not None and _is_azure_model_router(request_model)
-    )
+    # "model_router"/"azure-model-router" aliases are the router itself, not a billable model.
+    # Their entry in model_prices_and_context_window.json exists only so
+    # calculate_azure_model_router_flat_cost can look up the flat per-token rate; pricing it
+    # here too would double count that same flat fee once _get_additional_costs adds it.
+    if _is_azure_model_router(model):
+        return 0.0, 0.0
 
     # Calculate base cost using generic cost calculator
     # This may raise an exception if the model is not in the cost map
     try:
-        prompt_cost, completion_cost = generic_cost_per_token(
+        return generic_cost_per_token(
             model=model,
             usage=usage,
             custom_llm_provider="azure_ai",
             service_tier=service_tier,
         )
     except Exception as e:
-        # For Model Router, the model name (e.g., "azure-model-router") may not be in the cost map
-        # because it's a routing service, not an actual model. In this case, we continue
-        # to calculate just the routing flat cost.
-        if not _is_azure_model_router(model):
-            # Re-raise for non-router models - they should have pricing defined
-            raise
-        verbose_logger.debug(
-            f"Azure AI Model Router: model '{model}' not in cost map, calculating routing flat cost only. Error: {e}"
-        )
-
-    # Add flat cost for Azure Model Router
-    # The flat cost is defined in model_prices_and_context_window.json for azure_ai/model_router
-    if is_router_request:
-        # Use the request model for flat cost calculation if available, otherwise use response model
-        router_model_for_calc = request_model if request_model else model
-        router_flat_cost = calculate_azure_model_router_flat_cost(
-            router_model_for_calc, usage.prompt_tokens
-        )
-
-        if router_flat_cost > 0:
+        # The response can come back with the router alias instead of the actual routed-to
+        # model (e.g. when Azure hasn't resolved it yet). In that case there's no per-model
+        # cost to add - only the flat routing fee applies, handled elsewhere.
+        if request_model is not None and _is_azure_model_router(request_model):
             verbose_logger.debug(
-                f"Azure AI Model Router flat cost: ${router_flat_cost:.6f} "
-                f"({usage.prompt_tokens} tokens × ${router_flat_cost / usage.prompt_tokens:.9f}/token)"
+                f"Azure AI Model Router: model '{model}' not in cost map, returning 0 cost for the underlying model. Error: {e}"
             )
-
-            # Add flat cost to prompt cost
-            prompt_cost += router_flat_cost
-
-    return prompt_cost, completion_cost
+            return 0.0, 0.0
+        # Re-raise for non-router models - they should have pricing defined
+        raise
