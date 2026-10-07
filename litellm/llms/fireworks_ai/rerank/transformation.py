@@ -23,6 +23,7 @@ from litellm.types.rerank import (
     RerankResponseResult,
     RerankTokens,
 )
+from litellm.types.utils import ModelInfo
 
 
 class _FireworksAIUsageFields(LiteLLMBaseModel):
@@ -269,7 +270,7 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
             rerank_results.append(rerank_result)
 
         usage_fields: Final = _FireworksAIUsageFields.model_validate(usage)
-        _billed_units: Final = RerankBilledUnits(search_units=usage_fields.total_tokens)
+        _billed_units: Final = RerankBilledUnits(total_tokens=usage_fields.total_tokens)
         _tokens: Final = RerankTokens(
             input_tokens=usage_fields.prompt_tokens,
             output_tokens=usage_fields.completion_tokens,
@@ -283,3 +284,27 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
             results=rerank_results,
             meta=rerank_meta,
         )
+
+    def calculate_rerank_cost(
+        self,
+        model: str,
+        custom_llm_provider: str | None = None,
+        billed_units: RerankBilledUnits | None = None,
+        model_info: ModelInfo | None = None,
+    ) -> tuple[float, float]:
+        """
+        Fireworks AI bills rerank calls by total tokens processed, not by
+        query, so this prices against `input_cost_per_token` instead of the
+        base class's `input_cost_per_query`.
+        """
+        if (
+            model_info is None
+            or "input_cost_per_token" not in model_info
+            or model_info["input_cost_per_token"] is None
+            or billed_units is None
+        ):
+            return 0.0, 0.0
+        total_tokens: Final = billed_units.get("total_tokens")
+        if total_tokens is None:
+            return 0.0, 0.0
+        return model_info["input_cost_per_token"] * total_tokens, 0.0

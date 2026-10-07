@@ -197,7 +197,7 @@ class TestFireworksAIRerankTransform:
         # Verify metadata
         assert result.meta["tokens"]["input_tokens"] == 50
         assert result.meta["tokens"]["output_tokens"] == 50
-        assert result.meta["billed_units"]["search_units"] == 100
+        assert result.meta["billed_units"]["total_tokens"] == 100
 
     def test_transform_rerank_response_without_documents(self):
         """Test response transformation when return_documents is False."""
@@ -343,6 +343,80 @@ class TestFireworksAIRerankTransform:
         assert headers["Authorization"] == "Bearer test-api-key"
         assert headers["Content-Type"] == "application/json"
 
+    def test_calculate_rerank_cost(self):
+        """
+        Regression test: Fireworks AI rerank models (e.g. qwen3-reranker-8b)
+        are priced per token, not per query, so cost must come from
+        `input_cost_per_token` against `billed_units.total_tokens`.
+
+        Before the fix, FireworksAIRerankConfig had no `calculate_rerank_cost`
+        override, so it inherited the base class's per-query pricing, which
+        requires `input_cost_per_query` (never set for Fireworks rerank models)
+        and returned 0.0 unconditionally.
+        """
+        from litellm.types.rerank import RerankBilledUnits
+
+        billed_units = RerankBilledUnits(total_tokens=1000)
+        model_info = {"input_cost_per_token": 2e-07}
+
+        prompt_cost, completion_cost = self.config.calculate_rerank_cost(
+            model=self.model,
+            billed_units=billed_units,
+            model_info=model_info,
+        )
+
+        assert abs(prompt_cost - 0.0002) < 1e-12  # 1000 * 2e-07
+        assert completion_cost == 0.0
+
+    def test_calculate_rerank_cost_missing_info_returns_zero(self):
+        """No pricing or usage info available means cost is 0, not an error."""
+        prompt_cost, completion_cost = self.config.calculate_rerank_cost(
+            model=self.model,
+            billed_units=None,
+            model_info=None,
+        )
+
+        assert prompt_cost == 0.0
+        assert completion_cost == 0.0
+
+    def test_transform_then_calculate_rerank_cost_bills_nonzero(self):
+        """
+        End-to-end regression test for the reported bug: transforming a real
+        Fireworks AI rerank response and feeding its billed_units straight into
+        calculate_rerank_cost must produce a nonzero cost when the model has
+        per-token pricing.
+
+        Before the fix this was 0.0 twice over: `transform_rerank_response`
+        stored the token count under the wrong key (`search_units` instead of
+        `total_tokens`), and `calculate_rerank_cost` only understood
+        `input_cost_per_query` pricing, which Fireworks rerank models don't set.
+        """
+        response_data = {
+            "id": "rerank-1",
+            "data": [{"index": 0, "relevance_score": 0.95}],
+            "usage": {"total_tokens": 1000, "prompt_tokens": 1000, "completion_tokens": 0},
+        }
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.json.return_value = response_data
+        mock_response.status_code = 200
+        mock_response.headers = {}
+
+        result = self.config.transform_rerank_response(
+            model=self.model,
+            raw_response=mock_response,
+            model_response=RerankResponse(),
+            logging_obj=MagicMock(),
+        )
+
+        prompt_cost, completion_cost = self.config.calculate_rerank_cost(
+            model=self.model,
+            billed_units=result.meta["billed_units"],
+            model_info={"input_cost_per_token": 2e-07},
+        )
+
+        assert abs(prompt_cost - 0.0002) < 1e-12  # 1000 * 2e-07
+        assert completion_cost == 0.0
+
 
 def _transform(payload: object) -> RerankResponse:
     return FireworksAIRerankConfig().transform_rerank_response(
@@ -370,7 +444,7 @@ def test_transform_rerank_response_converts_index_and_score_with_int_and_float(
 def test_transform_rerank_response_without_usage_counters_reports_zero_tokens(usage_fields: dict[str, object]):
     response = _transform({"id": "rerank-1", "data": [{"index": 0, "relevance_score": 0.5}], **usage_fields})
 
-    assert response.meta == {"billed_units": {"search_units": 0}, "tokens": {"input_tokens": 0, "output_tokens": 0}}
+    assert response.meta == {"billed_units": {"total_tokens": 0}, "tokens": {"input_tokens": 0, "output_tokens": 0}}
 
 
 def test_transform_rerank_response_keeps_provider_id_and_falls_back_to_results_key():
