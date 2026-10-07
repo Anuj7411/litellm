@@ -2,13 +2,18 @@
 For calculating cost of fireworks ai serverless inference models.
 """
 
-from typing import Tuple
+from typing import Tuple, cast
 
 from litellm.constants import (
     FIREWORKS_AI_4_B,
     FIREWORKS_AI_16_B,
     FIREWORKS_AI_56_B_MOE,
     FIREWORKS_AI_176_B_MOE,
+)
+from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    _get_cost_per_unit,
+    _parse_prompt_tokens_details,
+    get_billable_input_tokens,
 )
 from litellm.types.utils import Usage
 from litellm.utils import get_model_info
@@ -77,8 +82,24 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
         )
 
     ## CALCULATE INPUT COST
-
-    prompt_cost: float = usage["prompt_tokens"] * model_info["input_cost_per_token"]
+    ## Discount cache-hit tokens at `cache_read_input_token_cost` when the model
+    ## supports prompt caching (e.g. glm-4p7, kimi-k2p5), falling back to the
+    ## regular input price for models without a cache rate.
+    cache_hit_tokens = _parse_prompt_tokens_details(usage)["cache_hit_tokens"]
+    billable_prompt_tokens = get_billable_input_tokens(usage)
+    input_cost_per_token = cast(float, model_info["input_cost_per_token"])
+    cache_read_cost_per_token = cast(
+        float,
+        _get_cost_per_unit(
+            model_info,
+            "cache_read_input_token_cost",
+            input_cost_per_token,
+        ),
+    )
+    prompt_cost: float = (
+        billable_prompt_tokens * input_cost_per_token
+        + cache_hit_tokens * cache_read_cost_per_token
+    )
 
     ## CALCULATE OUTPUT COST
     completion_cost = usage["completion_tokens"] * model_info["output_cost_per_token"]
