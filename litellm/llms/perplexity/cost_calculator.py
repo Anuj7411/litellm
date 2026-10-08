@@ -6,7 +6,11 @@ Helper util for handling perplexity-specific cost calculation
 from datetime import datetime
 from typing import Final
 
-from litellm.litellm_core_utils.llm_cost_calc.utils import TokenRates, apply_off_peak_pricing
+from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    TokenRates,
+    apply_off_peak_pricing,
+    get_billable_input_tokens,
+)
 from litellm.types.utils import Usage
 from litellm.utils import get_model_info
 
@@ -58,7 +62,7 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
         TokenRates(
             input_rate=_safe_float_cast(model_info.get("input_cost_per_token")),
             output_rate=_safe_float_cast(model_info.get("output_cost_per_token")),
-            cache_read_rate=0.0,
+            cache_read_rate=_safe_float_cast(model_info.get("cache_read_input_token_cost")),
             cache_creation_rate=0.0,
             reasoning_rate=None,
         ),
@@ -67,7 +71,10 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
     output_cost_per_token: Final = rates.output_rate
 
     ## CALCULATE INPUT COST
-    prompt_cost: float = (usage.prompt_tokens or 0) * input_cost_per_token
+    ## Cached tokens are billed at cache_read_input_token_cost, not the full input rate
+    billable_prompt_tokens: Final = get_billable_input_tokens(usage)
+    cache_hit_tokens: Final = (usage.prompt_tokens or 0) - billable_prompt_tokens
+    prompt_cost: float = billable_prompt_tokens * input_cost_per_token + cache_hit_tokens * rates.cache_read_rate
 
     ## ADD CITATION TOKENS COST (if present)
     citation_tokens: Final = getattr(usage, "citation_tokens", 0) or 0

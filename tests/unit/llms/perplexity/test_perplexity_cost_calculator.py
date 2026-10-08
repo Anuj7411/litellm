@@ -90,6 +90,37 @@ class TestPerplexityCostCalculator:
             assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
             assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
 
+    def test_manual_fallback_discounts_cached_tokens(self):
+        """
+        Regression: the manual fallback (no usage.cost from Perplexity) billed every
+        prompt token at the full input rate, ignoring cache_read_input_token_cost
+        entirely. Models like perplexity/anthropic/claude-sonnet-5 configure a
+        cache_read_input_token_cost well below input_cost_per_token, so a cache hit
+        must be billed at the cheaper rate instead of the full one.
+        """
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=50,
+            total_tokens=1050,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=800),
+        )
+
+        with patch("litellm.llms.perplexity.cost_calculator.get_model_info") as mock_get_model_info:
+            mock_get_model_info.return_value = {
+                "input_cost_per_token": 2e-6,
+                "output_cost_per_token": 8e-6,
+                "cache_read_input_token_cost": 2e-7,
+            }
+
+            prompt_cost, _ = perplexity_cost_per_token(model="claude-sonnet-5", usage=usage)
+
+        expected_prompt_cost = (200 * 2e-6) + (800 * 2e-7)
+
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
+        # Billing every prompt token at the full rate would overcharge relative
+        # to the discounted cache rate.
+        assert prompt_cost < 1000 * 2e-6
+
     def test_uses_perplexity_provided_cost_when_available(self):
         """
         Test that when Perplexity provides pre-calculated cost in usage.cost.total_cost,
