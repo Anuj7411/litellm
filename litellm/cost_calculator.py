@@ -2496,13 +2496,19 @@ def default_image_cost_calculator(
         ("output_cost_per_image", image_count),
         ("input_cost_per_pixel", height * width * image_count),
     )
+
+    def _priced_components(price_table: Mapping[str, object]) -> float | None:
+        # A price table can declare more than one component at once (e.g. an edit model
+        # billing input_cost_per_image for the source image and output_cost_per_image for
+        # the result); every declared component must be added, not just whichever
+        # unit_counts entry happens to be checked first.
+        matched: Final = tuple(
+            price * units for cost_key, units in unit_counts if (price := price_table.get(cost_key)) is not None
+        )
+        return sum(matched) if matched else None
+
     cost: Final = next(
-        (
-            price * units
-            for price_table in price_tables
-            for cost_key, units in unit_counts
-            if (price := price_table.get(cost_key)) is not None
-        ),
+        (total for price_table in price_tables if (total := _priced_components(price_table)) is not None),
         None,
     )
     if cost is None:

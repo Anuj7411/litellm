@@ -1171,6 +1171,31 @@ def test_default_image_cost_calculator(monkeypatch):
     assert cost == 10485760
 
 
+def test_default_image_cost_calculator_sums_input_and_output_image_cost(monkeypatch):
+    """
+    An image-edit deployment can price both the source image it reads (input_cost_per_image)
+    and the image it returns (output_cost_per_image) on the same price table. Both must be
+    billed; the calculator must not stop at whichever one it checks first.
+    """
+    from litellm.cost_calculator import default_image_cost_calculator
+
+    monkeypatch.setattr(litellm, "model_cost", {})
+
+    cost = default_image_cost_calculator(
+        model="my-image-edit-model",
+        custom_llm_provider="openai",
+        n=1,
+        size="1024-x-1024",
+        model_info=ModelInfo(
+            key="my-image-edit-model",
+            litellm_provider="openai",
+            input_cost_per_image=0.01,
+            output_cost_per_image=0.04,
+        ),
+    )
+    assert cost == pytest.approx(0.05)
+
+
 @pytest.mark.parametrize(
     ("model", "quality", "size", "priced_key", "pixels"),
     [
