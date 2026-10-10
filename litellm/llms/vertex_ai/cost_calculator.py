@@ -192,8 +192,12 @@ def _handle_128k_pricing(
         prompt_cost = prompt_tokens * (model_info["input_cost_per_token"] or 0.0)
 
     ## CALCULATE OUTPUT COST
+    # The long-context tier is decided once, from the prompt size, and applies to both
+    # legs of the request: Google prices a request's whole response at the long-context
+    # output rate once its prompt crosses the threshold, regardless of how short the
+    # completion itself is.
     output_cost_per_token_above_128k_tokens = model_info.get("output_cost_per_token_above_128k_tokens")
-    if is_above_128k(tokens=completion_tokens) and output_cost_per_token_above_128k_tokens is not None:
+    if is_above_128k(tokens=prompt_tokens) and output_cost_per_token_above_128k_tokens is not None:
         completion_cost = completion_tokens * output_cost_per_token_above_128k_tokens
     else:
         completion_cost = completion_tokens * (model_info["output_cost_per_token"] or 0.0)
