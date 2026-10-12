@@ -2498,13 +2498,19 @@ def default_image_cost_calculator(
         ("output_cost_per_image", image_count),
         ("input_cost_per_pixel", height * width * image_count),
     )
+
+    def _priced_components_total(price_table: Mapping[str, object]) -> float | None:
+        # A price table can legitimately set more than one of these keys at once, e.g.
+        # amazon.titan-image-generator-v1 prices input_cost_per_image=0.0 (a free reference
+        # image) alongside a real output_cost_per_image. Summing every key the table prices
+        # avoids a free component short-circuiting a real one.
+        priced: Final = [
+            price * units for cost_key, units in unit_counts if (price := price_table.get(cost_key)) is not None
+        ]
+        return sum(priced) if priced else None
+
     cost: Final = next(
-        (
-            price * units
-            for price_table in price_tables
-            for cost_key, units in unit_counts
-            if (price := price_table.get(cost_key)) is not None
-        ),
+        (total for price_table in price_tables if (total := _priced_components_total(price_table)) is not None),
         None,
     )
     if cost is None:

@@ -1242,6 +1242,42 @@ def test_default_image_cost_calculator_matches_provider_first_quality_key(
     assert cost == litellm.model_cost[priced_key]["input_cost_per_pixel"] * pixels
 
 
+def test_default_image_cost_calculator_sums_priced_components_when_input_is_free(monkeypatch):
+    """
+    Regression: a price table can price more than one image component at once, e.g. the
+    real amazon.titan-image-generator-v1 entry sets input_cost_per_image=0.0 (a free
+    reference image) alongside a real output_cost_per_image=0.008. The calculator must
+    bill the sum of every component the table prices.
+
+    Before the fix, it stopped at the first non-None price it found -- input_cost_per_image
+    -- and returned that alone, so a free input component silently zeroed out a real
+    output charge instead of the two being added together.
+    """
+    from litellm.cost_calculator import default_image_cost_calculator
+
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "titan-image-test-model": {
+                "litellm_provider": "bedrock",
+                "input_cost_per_image": 0.0,
+                "output_cost_per_image": 0.008,
+            }
+        },
+    )
+
+    cost = default_image_cost_calculator(
+        model="titan-image-test-model",
+        custom_llm_provider="bedrock",
+        n=3,
+        size="1024-x-1024",
+        optional_params={},
+    )
+
+    assert cost == pytest.approx(0.008 * 3)
+
+
 def test_cost_calculator_with_cache_creation():
     from litellm import completion_cost
     from litellm.types.utils import Choices, Message, Usage
