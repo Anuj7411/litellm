@@ -1721,6 +1721,10 @@ def test_vertex_uplift_composes_with_above_128k_pricing(monkeypatch):
     )
 
     assert global_prompt == pytest.approx(200_000 * 2e-06, rel=1e-9)
+    # completion_tokens=10 is nowhere near 128k, but the long-context tier is driven by
+    # prompt size, not completion size, so the above-128k output rate still applies to
+    # every output token once the request itself crosses the threshold.
+    assert global_completion == pytest.approx(10 * 4e-06, rel=1e-9)
     assert regional_prompt == pytest.approx(global_prompt * 1.10, rel=1e-9)
     assert regional_completion == pytest.approx(global_completion * 1.10, rel=1e-9)
 

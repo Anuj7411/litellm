@@ -179,21 +179,24 @@ def _handle_128k_pricing(
     model_info: ModelInfo,
     usage: Usage,
 ) -> tuple[float, float]:
-    ## CALCULATE INPUT COST
+    """
+    Google's long-context tier is determined by the request's prompt/context size: once
+    prompt_tokens crosses 128k, both input AND output tokens for that request bill at the
+    above-128k rate (mirrors `_get_token_base_cost` in llm_cost_calc/utils.py).
+    """
     input_cost_per_token_above_128k_tokens: Final = model_info.get("input_cost_per_token_above_128k_tokens")
-    output_cost_per_token_above_128k_tokens = model_info.get("output_cost_per_token_above_128k_tokens")
+    output_cost_per_token_above_128k_tokens: Final = model_info.get("output_cost_per_token_above_128k_tokens")
 
     prompt_tokens: Final = usage.prompt_tokens
     completion_tokens: Final = usage.completion_tokens
+    is_long_context: Final = is_above_128k(tokens=prompt_tokens)
 
-    if is_above_128k(tokens=prompt_tokens) and input_cost_per_token_above_128k_tokens is not None:
+    if is_long_context and input_cost_per_token_above_128k_tokens is not None:
         prompt_cost = prompt_tokens * input_cost_per_token_above_128k_tokens
     else:
         prompt_cost = prompt_tokens * (model_info["input_cost_per_token"] or 0.0)
 
-    ## CALCULATE OUTPUT COST
-    output_cost_per_token_above_128k_tokens = model_info.get("output_cost_per_token_above_128k_tokens")
-    if is_above_128k(tokens=completion_tokens) and output_cost_per_token_above_128k_tokens is not None:
+    if is_long_context and output_cost_per_token_above_128k_tokens is not None:
         completion_cost = completion_tokens * output_cost_per_token_above_128k_tokens
     else:
         completion_cost = completion_tokens * (model_info["output_cost_per_token"] or 0.0)
