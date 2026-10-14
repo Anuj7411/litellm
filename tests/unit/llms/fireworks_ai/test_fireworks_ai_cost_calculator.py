@@ -365,6 +365,32 @@ def test_an_unknown_fireworks_model_still_falls_back_to_the_parameter_size_bucke
     assert prompt_cost > 0
 
 
+def test_an_unmapped_moe_model_above_176b_still_bills_at_a_moe_bucket_not_a_dense_one():
+    """
+    Regression: get_base_model_for_pricing's MoE branch had no fallback once total_billion
+    (the product of the "NxMb" factors) exceeded FIREWORKS_AI_176_B_MOE, so it fell through
+    to the standard-model regex, which re-matched the "30" in "8x30b" as if it were the whole
+    model's parameter count and billed a 240B-total-parameter MoE model at the dense
+    16b-to-above-16b rate instead of a MoE rate.
+    """
+    unmapped_large_moe_prompt_cost, unmapped_large_moe_completion_cost = cost_per_token(
+        model="accounts/fireworks/models/not-in-the-map-8x30b",
+        usage=_usage(prompt_tokens=100, cached_tokens=0, completion_tokens=10),
+    )
+    top_moe_bucket_prompt_cost, top_moe_bucket_completion_cost = cost_per_token(
+        model="fireworks-ai-56b-to-176b", usage=_usage(prompt_tokens=100, cached_tokens=0, completion_tokens=10)
+    )
+    dense_above_16b_bucket_prompt_cost, _ = cost_per_token(
+        model="fireworks-ai-above-16b", usage=_usage(prompt_tokens=100, cached_tokens=0, completion_tokens=10)
+    )
+
+    assert (unmapped_large_moe_prompt_cost, unmapped_large_moe_completion_cost) == (
+        top_moe_bucket_prompt_cost,
+        top_moe_bucket_completion_cost,
+    )
+    assert unmapped_large_moe_prompt_cost != dense_above_16b_bucket_prompt_cost
+
+
 _TIERED_INPUT_PATTERN: Final = re.compile(r"^input_cost_per_token_above_(\d+)k_tokens$")
 
 

@@ -9,7 +9,6 @@ from litellm.constants import (
     FIREWORKS_AI_4_B,
     FIREWORKS_AI_16_B,
     FIREWORKS_AI_56_B_MOE,
-    FIREWORKS_AI_176_B_MOE,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.types.utils import ModelInfo, Usage
@@ -29,14 +28,16 @@ def get_base_model_for_pricing(model_name: str) -> str:
 
     model_name = model_name.lower()
 
-    # Check for MoE models in the form <number>x<number>b
+    # Check for MoE models in the form <number>x<number>b. Always returns a MoE bucket so a
+    # model whose total parameter count exceeds FIREWORKS_AI_176_B_MOE doesn't fall through to
+    # the standard-model regex below, which would re-match one of the MoE factors (e.g. the "30"
+    # in "8x30b") as if it were the model's total parameter count.
     moe_match: Final = re.search(r"(\d+)x(\d+)b", model_name)
     if moe_match:
         total_billion: Final = int(moe_match.group(1)) * int(moe_match.group(2))
         if total_billion <= FIREWORKS_AI_56_B_MOE:
             return "fireworks-ai-moe-up-to-56b"
-        elif total_billion <= FIREWORKS_AI_176_B_MOE:
-            return "fireworks-ai-56b-to-176b"
+        return "fireworks-ai-56b-to-176b"
 
     # Check for standard models in the form <number>b
     re_params_match: Final = re.search(r"(\d+)b", model_name)
