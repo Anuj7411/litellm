@@ -4,6 +4,7 @@ Translates from Cohere's `/v1/rerank` input format to Bedrock's `/rerank` input 
 Why separate file? Make it easy to see how transformation works
 """
 
+import math
 from typing import Final
 
 from litellm._uuid import uuid
@@ -29,6 +30,11 @@ from litellm.types.rerank import (
 
 
 class BedrockRerankConfig:
+    # Bedrock bills one search unit per up to 100 document chunks in a query,
+    # but the Rerank response never reports how many units were actually billed.
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/rerank-pricing.html
+    MAX_DOCUMENT_CHUNKS_PER_SEARCH_UNIT: Final[int] = 100
+
     def _transform_sources(self, documents: list[str | dict]) -> list[BedrockRerankSource]:
         """
         Transform the sources from RerankRequest format to Bedrock format.
@@ -83,15 +89,25 @@ class BedrockRerankConfig:
     ) -> BedrockRerankRequest:
         return self._transform_request(request_data)
 
-    def _transform_response(self, response: dict) -> RerankResponse:
+    def _default_search_units(self, num_document_chunks: int | None) -> int:
+        if num_document_chunks is None or num_document_chunks <= 0:
+            return 1
+        return math.ceil(num_document_chunks / self.MAX_DOCUMENT_CHUNKS_PER_SEARCH_UNIT)
+
+    def _transform_response(self, response: dict, num_document_chunks: int | None = None) -> RerankResponse:
         """
         Transform the response from Bedrock into the RerankResponse format.
 
         example input:
         {"results":[{"index":0,"relevanceScore":0.6847912669181824},{"index":1,"relevanceScore":0.5980774760246277}]}
         """
-        _billed_units = RerankBilledUnits(**response.get("usage", {"search_units": 1}))  # by default 1 search unit
-        _tokens: Final = RerankTokens(**response.get("usage", {}))
+        usage: Final = response.get("usage")
+        _billed_units = (
+            RerankBilledUnits(**usage)
+            if usage is not None
+            else RerankBilledUnits(search_units=self._default_search_units(num_document_chunks))
+        )
+        _tokens: Final = RerankTokens(**(usage or {}))
         rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
         _results: list[RerankResponseResult] | None = None
@@ -118,5 +134,6 @@ class BedrockRerankConfig:
     def transform_response(
         self,
         response: dict[str, object],  # mutable-ok: mirrors override contract
+        num_document_chunks: int | None = None,
     ) -> RerankResponse:
-        return self._transform_response(response)
+        return self._transform_response(response, num_document_chunks=num_document_chunks)

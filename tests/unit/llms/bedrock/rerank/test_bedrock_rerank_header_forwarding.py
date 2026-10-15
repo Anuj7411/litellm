@@ -514,7 +514,7 @@ RERANK_MODEL_ARN = "arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1
 NON_OBJECT_BODIES = [7, "sensitive-document", [{"index": 0, "relevanceScore": 0.9, "id": "sensitive-document"}]]
 
 
-def _rerank_through_transport(payload: object, *, is_async: bool):
+def _rerank_through_transport(payload: object, *, is_async: bool, documents: list = test_documents):
     transport = httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
     client = (
         AsyncHTTPHandler(transport=transport) if is_async else HTTPHandler(client=httpx.Client(transport=transport))
@@ -522,7 +522,7 @@ def _rerank_through_transport(payload: object, *, is_async: bool):
     return BedrockRerankHandler().rerank(
         model=RERANK_MODEL_ARN,
         query=test_query,
-        documents=test_documents,
+        documents=documents,
         optional_params={
             "aws_access_key_id": "AKIAEXAMPLE",
             "aws_secret_access_key": "example-secret",
@@ -565,3 +565,56 @@ async def test_bedrock_arerank_rejects_non_object_bodies(payload: object):
         await _rerank_through_transport(payload, is_async=True)
 
     assert "sensitive-document" not in str(exc_info.value)
+
+
+def _bedrock_response_without_usage(num_results: int) -> dict:
+    """Shape of a real Bedrock Rerank response: AWS never returns a "usage" or
+    other billing field, only "results" and an optional "nextToken"."""
+    return {"results": [{"index": i, "relevanceScore": 1.0} for i in range(num_results)]}
+
+
+def test_bedrock_rerank_defaults_to_one_search_unit_within_the_chunk_limit():
+    response = _rerank_through_transport(_bedrock_response_without_usage(len(test_documents)), is_async=False)
+    assert response.meta == {"billed_units": {"search_units": 1}, "tokens": {}}
+
+
+async def test_bedrock_arerank_defaults_to_one_search_unit_within_the_chunk_limit():
+    response = await _rerank_through_transport(_bedrock_response_without_usage(len(test_documents)), is_async=True)
+    assert response.meta == {"billed_units": {"search_units": 1}, "tokens": {}}
+
+
+def test_bedrock_rerank_bills_multiple_search_units_over_the_chunk_limit():
+    """
+    AWS bills Bedrock Rerank per search unit, where one search unit covers up to
+    100 document chunks in a single query (the SearchUnits CloudWatch metric).
+    The Rerank response never reports how many units were actually billed, so a
+    150-document request must be costed as 2 search units, not silently billed
+    as 1 - undercounting cost by half.
+    """
+    many_documents = [f"document {i}" for i in range(150)]
+    response = _rerank_through_transport(
+        _bedrock_response_without_usage(len(many_documents)),
+        is_async=False,
+        documents=many_documents,
+    )
+    assert response.meta == {"billed_units": {"search_units": 2}, "tokens": {}}
+
+    from litellm.cost_calculator import rerank_cost
+
+    prompt_cost, completion_cost = rerank_cost(
+        model=f"bedrock/{RERANK_MODEL_ARN}",
+        custom_llm_provider="bedrock",
+        billed_units=response.meta["billed_units"],
+    )
+    assert prompt_cost == pytest.approx(0.002)  # 2 search units * $0.001/unit
+    assert completion_cost == 0.0
+
+
+async def test_bedrock_arerank_bills_multiple_search_units_over_the_chunk_limit():
+    many_documents = [f"document {i}" for i in range(250)]
+    response = await _rerank_through_transport(
+        _bedrock_response_without_usage(len(many_documents)),
+        is_async=True,
+        documents=many_documents,
+    )
+    assert response.meta == {"billed_units": {"search_units": 3}, "tokens": {}}

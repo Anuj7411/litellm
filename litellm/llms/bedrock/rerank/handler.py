@@ -58,7 +58,10 @@ class BedrockRerankHandler(BaseAWSLLM):
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
-        return BedrockRerankConfig().transform_response(_JSON_DICT.validate_python(response.json()))
+        return BedrockRerankConfig().transform_response(
+            _JSON_DICT.validate_python(response.json()),
+            num_document_chunks=len(prepared_request["data"].get("sources", [])),
+        )
 
     def rerank(
         self,
@@ -141,7 +144,10 @@ class BedrockRerankHandler(BaseAWSLLM):
 
         response_json: Final = _JSON_DICT.validate_python(response.json())
 
-        return BedrockRerankConfig().transform_response(response_json)
+        return BedrockRerankConfig().transform_response(
+            response_json,
+            num_document_chunks=len(data.get("sources", [])),
+        )
 
     def _prepare_request(
         self,
