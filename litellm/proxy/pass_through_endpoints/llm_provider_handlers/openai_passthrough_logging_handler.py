@@ -205,6 +205,24 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         return None
 
     @staticmethod
+    def _billed_image_count(response_body: dict, request_body: dict) -> int:
+        """Images to bill for: the number actually returned, not the number requested.
+
+        OpenAI's image endpoints can return fewer images than `n` asked for (e.g. when
+        content moderation drops part of a batch), so billing off the request's `n`
+        overcharges for images that were never generated. Falls back to the requested
+        `n` only when `response_body["data"]` isn't the expected list, so a malformed or
+        differently-shaped response doesn't silently bill zero.
+        """
+        response_data = response_body.get("data")
+        if isinstance(response_data, list):
+            return len(response_data)
+        try:
+            return int(request_body.get("n", 1))
+        except Exception:
+            return 1
+
+    @staticmethod
     def _calculate_image_generation_cost(
         model: str,
         response_body: dict,
@@ -212,12 +230,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
     ) -> float:
         """Calculate cost for OpenAI image generation."""
         try:
-            # Extract parameters from request
-            n = request_body.get("n", 1)
-            try:
-                n = int(n)
-            except Exception:
-                n = 1
+            n: Final = OpenAIPassthroughLoggingHandler._billed_image_count(response_body, request_body)
             size: Final = request_body.get("size", "1024x1024")
             quality: Final = request_body.get("quality", None)
 
@@ -246,13 +259,8 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
     ) -> float:
         """Calculate cost for OpenAI image editing."""
         try:
-            # Extract parameters from request
-            n = request_body.get("n", 1)
             # Image edit typically uses multipart/form-data (because of files), so all fields arrive as strings (e.g., n = "1").
-            try:
-                n = int(n)
-            except Exception:
-                n = 1
+            n: Final = OpenAIPassthroughLoggingHandler._billed_image_count(response_body, request_body)
             size: Final = request_body.get("size", "1024x1024")
 
             # Use LiteLLM's default image cost calculator

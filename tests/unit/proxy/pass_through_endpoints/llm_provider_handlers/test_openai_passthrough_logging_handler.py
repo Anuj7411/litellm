@@ -1656,6 +1656,78 @@ class TestOpenAIPassthroughIntegration:
             optional_params=request_body,
         )
 
+    @patch("litellm.cost_calculator.default_image_cost_calculator")
+    def test_calculate_image_generation_cost_bills_actual_images_returned(self, mock_image_cost_calculator):
+        """OpenAI can return fewer images than `n` requested (e.g. moderation drops one of a
+        batch). Cost must be billed on the images actually in the response, not on the
+        requested `n`, or the caller is charged for images that were never generated."""
+        mock_image_cost_calculator.return_value = 0.126
+        model = "gpt-image-1"
+        response_body = {
+            "data": [
+                {"url": "https://example.com/image1.png"},
+                {"url": "https://example.com/image2.png"},
+                {"url": "https://example.com/image3.png"},
+            ]
+        }
+        request_body = {
+            "model": "gpt-image-1",
+            "prompt": "A beautiful sunset over the ocean",
+            "n": 4,
+            "size": "1024x1024",
+            "quality": "medium",
+        }
+
+        cost = OpenAIPassthroughLoggingHandler._calculate_image_generation_cost(
+            model=model,
+            response_body=response_body,
+            request_body=request_body,
+        )
+
+        assert cost == 0.126
+        mock_image_cost_calculator.assert_called_once_with(
+            model=model,
+            custom_llm_provider="openai",
+            quality="medium",
+            n=3,
+            size="1024x1024",
+            optional_params=request_body,
+        )
+
+    @patch("litellm.cost_calculator.default_image_cost_calculator")
+    def test_calculate_image_editing_cost_bills_actual_images_returned(self, mock_image_cost_calculator):
+        """Same as above but for the image editing passthrough path."""
+        mock_image_cost_calculator.return_value = 0.040
+        model = "gpt-image-1"
+        response_body = {
+            "data": [
+                {"url": "https://example.com/edited_image1.png"},
+                {"url": "https://example.com/edited_image2.png"},
+            ]
+        }
+        request_body = {
+            "model": "gpt-image-1",
+            "prompt": "Add clouds to the sky",
+            "n": "3",  # multipart/form-data arrives as a string
+            "size": "1024x1024",
+        }
+
+        cost = OpenAIPassthroughLoggingHandler._calculate_image_editing_cost(
+            model=model,
+            response_body=response_body,
+            request_body=request_body,
+        )
+
+        assert cost == 0.040
+        mock_image_cost_calculator.assert_called_once_with(
+            model=model,
+            custom_llm_provider="openai",
+            quality=None,
+            n=2,
+            size="1024x1024",
+            optional_params=request_body,
+        )
+
     def test_cost_calculation_preservation(self):
         """Test that manually calculated costs are preserved and not overridden."""
         # Create a logging object
