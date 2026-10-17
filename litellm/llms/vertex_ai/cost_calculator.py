@@ -139,7 +139,6 @@ def cost_per_character(
             service_tier=service_tier,
         )
     else:
-        completion_tokens: Final = usage.completion_tokens
         try:
             if (
                 is_above_128k(tokens=completion_characters * 4)  # 1 token = 4 char
@@ -151,7 +150,7 @@ def cost_per_character(
                 ), (
                     f"model info for model={model} does not have 'output_cost_per_character_above_128k_tokens' pricing\nmodel_info={model_info}"
                 )
-                completion_cost = completion_tokens * model_info["output_cost_per_character_above_128k_tokens"]
+                completion_cost = completion_characters * model_info["output_cost_per_character_above_128k_tokens"]
             else:
                 assert (
                     "output_cost_per_character" in model_info and model_info["output_cost_per_character"] is not None

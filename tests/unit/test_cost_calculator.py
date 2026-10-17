@@ -8201,6 +8201,51 @@ def test_completion_cost_params_gemini_3():
     )
 
 
+def test_completion_cost_vertex_ai_character_pricing_above_128k_bills_by_characters(
+    _local_model_cost_map,
+):
+    """
+    Regression test: cost_per_character's above-128k completion branch billed
+    `usage.completion_tokens * output_cost_per_character_above_128k_tokens`, mixing a
+    token count into a per-character rate instead of `completion_characters`
+    (the matching prompt-cost branch multiplies `prompt_characters`, its correct
+    per-character counterpart). Tokens and characters diverge enough (~4 chars/token)
+    that this silently undercharged output above the 128k-token-equivalent threshold.
+    """
+    from litellm.llms.vertex_ai.cost_calculator import cost_per_character
+
+    model = "vertex-char-128k-test-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_character": 1e-6,
+                "output_cost_per_character": 2e-6,
+                "output_cost_per_character_above_128k_tokens": 4e-6,
+                "litellm_provider": "vertex_ai",
+                "max_tokens": 8192,
+            }
+        }
+    )
+
+    prompt_characters = 1000
+    completion_characters = 40000  # * 4 > 128_000, so the above-128k branch fires
+    usage = Usage(prompt_tokens=250, completion_tokens=100, total_tokens=350)
+
+    prompt_cost, completion_cost = cost_per_character(
+        model=model,
+        custom_llm_provider="vertex_ai",
+        usage=usage,
+        prompt_characters=prompt_characters,
+        completion_characters=completion_characters,
+    )
+
+    model_info = litellm.get_model_info(model, custom_llm_provider="vertex_ai")
+    assert prompt_cost == pytest.approx(prompt_characters * model_info["input_cost_per_character"])
+    assert completion_cost == pytest.approx(
+        completion_characters * model_info["output_cost_per_character_above_128k_tokens"]
+    )
+
+
 @pytest.mark.asyncio
 # @pytest.mark.flaky(retries=3, delay=1)
 @pytest.mark.parametrize("stream", [False])  # True,
