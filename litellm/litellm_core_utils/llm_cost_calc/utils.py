@@ -1762,7 +1762,9 @@ def calculate_prompt_caching_savings(
     Missing reads and unpublished (missing/zero) writes claim no saving or premium;
     explicit zero reads remain free. An unpublished 1h price uses the ordinary write rate.
     ``billed_at`` is the request's completion time, so off-peak windows resolve as the
-    biller saw them rather than at the later spend write.
+    biller saw them rather than at the later spend write. The regional/vertex uplifts and
+    Anthropic's provider_specific_entry geo/speed multipliers all scale the result, since
+    the totals they are compared against (e.g. anthropic_cost_per_token) apply them too.
     """
     model_info_with_cache_read_default: Final = apply_provider_cache_read_default(model_info, custom_llm_provider)
     prompt_base_cost, _, cache_creation_cost, cache_creation_cost_above_1hr, cache_read_cost = _get_token_base_cost(
@@ -1793,8 +1795,11 @@ def calculate_prompt_caching_savings(
         cache_creation_cost_above_1hr=write_rate_1h - prompt_base_cost,
         cache_creation_cost=write_rate - prompt_base_cost,
     )
-    uplift: Final = get_regional_uplift_multiplier(model_info, data_residency) * get_vertex_regional_endpoint_uplift(
-        model_info, vertex_location
+    uplift: Final = (
+        get_regional_uplift_multiplier(model_info, data_residency)
+        * get_vertex_regional_endpoint_uplift(model_info, vertex_location)
+        * get_provider_specific_geo_multiplier(model_info=model_info, usage=usage)
+        * get_provider_specific_speed_multiplier(model_info=model_info, usage=usage)
     )
     return (read_discount - write_premium) * uplift
 

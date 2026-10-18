@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     apply_off_peak_pricing,
     apply_provider_cache_read_default,
     calculate_cache_writing_cost,
+    calculate_prompt_caching_savings,
     generic_cost_per_token,
     get_billed_token_rates,
     get_token_type_cost_breakdown,
@@ -3070,6 +3071,73 @@ def test_token_type_cost_breakdown_applies_anthropic_geo_multiplier(_local_model
     text_output_cost = 300 * 25e-6 * 1.1
     assert text_input_cost + geo.cache_read_cost + geo.cache_creation_cost == pytest.approx(prompt_cost)
     assert text_output_cost + geo.reasoning_cost == pytest.approx(completion_cost)
+
+
+def test_calculate_prompt_caching_savings_applies_anthropic_geo_speed_multiplier(_local_model_cost_map, monkeypatch):
+    """
+    calculate_prompt_caching_savings() backs the "prompt caching savings" figure on the Cost
+    Optimization dashboard. Anthropic's provider_specific_entry geo/speed multipliers scale
+    every token type in the actual bill (anthropic_cost_per_token), so the savings figure must
+    scale by the same multipliers or it reports a saving far smaller than the cache actually
+    saved on a "us"/"fast" request.
+    """
+    from litellm.llms.anthropic.cost_calculation import (
+        cost_per_token as anthropic_cost_per_token,
+    )
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
+    model = "claude-test-savings-multiplier-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 5e-6,
+                "output_cost_per_token": 25e-6,
+                "cache_creation_input_token_cost": 6.25e-6,
+                "cache_read_input_token_cost": 0.5e-6,
+                "litellm_provider": "anthropic",
+                "max_tokens": 8192,
+                "provider_specific_entry": {"us": 1.1, "fast": 2.0},
+            }
+        }
+    )
+
+    def usage_with_cache() -> Usage:
+        usage = Usage(
+            prompt_tokens=10_000,
+            completion_tokens=500,
+            total_tokens=10_500,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=2_000, cache_creation_tokens=6_000),
+        )
+        usage.inference_geo = "us"
+        usage.speed = "fast"
+        return usage
+
+    def usage_without_cache() -> Usage:
+        # Same request and same multipliers, but nothing hit cache: every prompt token bills
+        # at the plain input rate, so the diff against usage_with_cache() isolates the cache
+        # read/write saving actually billed.
+        usage = Usage(prompt_tokens=10_000, completion_tokens=500, total_tokens=10_500)
+        usage.inference_geo = "us"
+        usage.speed = "fast"
+        return usage
+
+    model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="anthropic")
+
+    reported_savings: Final = calculate_prompt_caching_savings(
+        model_info=model_info,
+        usage=usage_with_cache(),
+        custom_llm_provider="anthropic",
+    )
+
+    with_cache_total: Final = sum(anthropic_cost_per_token(model=model, usage=usage_with_cache()))
+    without_cache_total: Final = sum(anthropic_cost_per_token(model=model, usage=usage_without_cache()))
+    actual_savings: Final = without_cache_total - with_cache_total
+
+    assert reported_savings == pytest.approx(actual_savings)
+    # 1.1 (us) * 2.0 (fast) = 2.2x the un-multiplied read-discount-minus-write-premium.
+    unmultiplied_savings: Final = (2_000 * (5e-6 - 0.5e-6)) - (6_000 * (6.25e-6 - 5e-6))
+    assert reported_savings == pytest.approx(unmultiplied_savings * 2.2)
 
 
 @pytest.mark.parametrize("details_as_dict", [True, False])
