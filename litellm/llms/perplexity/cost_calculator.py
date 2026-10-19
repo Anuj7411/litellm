@@ -133,8 +133,6 @@ def cost_per_token(
             # search_context_cost_per_query stores the per-request price in USD
             # (e.g. sonar low = $0.005/request). Use it directly, matching the
             # gemini cost calculator which reads the same field per request.
-            # Bill the tier the request actually asked for (low/medium/high),
-            # not always "low" -- Perplexity's sonar pricing differs per tier.
             size_key = f"search_context_size_{_requested_search_context_size(optional_params)}"
             search_cost_per_query = _safe_float_cast(
                 search_cost_value.get(size_key, search_cost_value.get("search_context_size_low", 0))
