@@ -764,7 +764,11 @@ def cost_per_token(
     elif custom_llm_provider == "tencent":
         return tencent_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "perplexity":
-        return perplexity_cost_per_token(model=model, usage=usage_block)
+        _response_hidden_params = getattr(response, "_hidden_params", None) if response is not None else None
+        _perplexity_optional_params = (
+            _response_hidden_params.get("optional_params") if isinstance(_response_hidden_params, dict) else None
+        )
+        return perplexity_cost_per_token(model=model, usage=usage_block, optional_params=_perplexity_optional_params)
     elif custom_llm_provider == "xai":
         return xai_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "lemonade":

@@ -217,6 +217,79 @@ class TestPerplexityCostCalculator:
         assert math.isclose(prompt_cost, 1000 * 1e-07, rel_tol=1e-10)
         assert math.isclose(completion_cost, 200 * 2e-07, rel_tol=1e-10)
 
+    def _register_tiered_search_model(self) -> str:
+        model = "sonar-search-tiers-test"
+        litellm.model_cost[f"perplexity/{model}"] = {
+            "litellm_provider": "perplexity",
+            "mode": "chat",
+            "input_cost_per_token": 1e-06,
+            "output_cost_per_token": 1e-06,
+            "search_context_cost_per_query": {
+                "search_context_size_low": 0.005,
+                "search_context_size_medium": 0.008,
+                "search_context_size_high": 0.012,
+            },
+        }
+        return model
+
+    @pytest.mark.parametrize(
+        "search_context_size,expected_search_fee",
+        [
+            (None, 0.005),
+            ("low", 0.005),
+            ("medium", 0.008),
+            ("high", 0.012),
+        ],
+    )
+    def test_search_cost_bills_the_requested_context_size_tier(self, search_context_size, expected_search_fee):
+        """
+        Regression: Perplexity bills a different per-request search fee depending on the
+        `web_search_options.search_context_size` ("low"/"medium"/"high") sent with the
+        request (e.g. sonar: $0.005/$0.008/$0.012). The cost calculator ignored that
+        request option entirely and always billed the "low" tier's price, undercharging
+        every "medium" or "high" request. It must now bill whichever tier was requested,
+        defaulting to "low" only when the request didn't set one.
+        """
+        model = self._register_tiered_search_model()
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=200,
+            total_tokens=1200,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=1),
+        )
+        optional_params = (
+            {"web_search_options": {"search_context_size": search_context_size}}
+            if search_context_size is not None
+            else None
+        )
+
+        prompt_cost, completion_cost = perplexity_cost_per_token(
+            model=model, usage=usage, optional_params=optional_params
+        )
+
+        expected_completion_cost = (200 * 1e-06) + expected_search_fee
+        assert math.isclose(prompt_cost, 1000 * 1e-06, rel_tol=1e-10)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
+
+    def test_search_cost_falls_back_to_low_for_an_unknown_context_size(self):
+        """An unrecognized search_context_size value must not crash or silently bill $0;
+        it falls back to the "low" tier price."""
+        model = self._register_tiered_search_model()
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=200,
+            total_tokens=1200,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=1),
+        )
+
+        _, completion_cost = perplexity_cost_per_token(
+            model=model,
+            usage=usage,
+            optional_params={"web_search_options": {"search_context_size": "ultra"}},
+        )
+
+        assert math.isclose(completion_cost, (200 * 1e-06) + 0.005, rel_tol=1e-10)
+
     def test_provider_stated_cost_still_wins_inside_an_off_peak_window(self):
         """A response that carries Perplexity's own metered cost bills that cost whatever the
         window says; the caller strips it when the deployment carries custom pricing."""

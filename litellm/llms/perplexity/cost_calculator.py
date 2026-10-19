@@ -11,7 +11,28 @@ from litellm.types.utils import Usage
 from litellm.utils import get_model_info
 
 
-def cost_per_token(model: str, usage: Usage, current_time: datetime | None = None) -> tuple[float, float]:
+def _requested_search_context_size(optional_params: dict | None) -> str:
+    """
+    Resolve the ``search_context_size`` tier the caller asked for via
+    ``web_search_options`` (``"low"``, ``"medium"``, or ``"high"``).
+
+    Defaults to ``"low"`` when the request did not set one, matching
+    Perplexity's documented default and this calculator's historical
+    behavior.
+    """
+    web_search_options = (optional_params or {}).get("web_search_options") or {}
+    size = web_search_options.get("search_context_size")
+    if size not in ("low", "medium", "high"):
+        return "low"
+    return size
+
+
+def cost_per_token(
+    model: str,
+    usage: Usage,
+    current_time: datetime | None = None,
+    optional_params: dict | None = None,
+) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
     The manual fallback swaps in the model's off_peak_pricing rates while one of its windows is open.
@@ -20,6 +41,9 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
         - model: str, the model name without provider prefix
         - usage: LiteLLM Usage block, containing perplexity-specific usage information
         - current_time: the moment the request is billed at; defaults to now, UTC
+        - optional_params: the request's optional params, read for
+          ``web_search_options.search_context_size`` so the matching
+          low/medium/high search fee is billed instead of always "low"
 
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
@@ -109,7 +133,12 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
             # search_context_cost_per_query stores the per-request price in USD
             # (e.g. sonar low = $0.005/request). Use it directly, matching the
             # gemini cost calculator which reads the same field per request.
-            search_cost_per_query = _safe_float_cast(search_cost_value.get("search_context_size_low", 0))
+            # Bill the tier the request actually asked for (low/medium/high),
+            # not always "low" -- Perplexity's sonar pricing differs per tier.
+            size_key = f"search_context_size_{_requested_search_context_size(optional_params)}"
+            search_cost_per_query = _safe_float_cast(
+                search_cost_value.get(size_key, search_cost_value.get("search_context_size_low", 0))
+            )
         else:
             search_cost_per_query = _safe_float_cast(search_cost_value)
         search_cost: Final = num_search_queries * search_cost_per_query
