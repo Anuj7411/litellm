@@ -217,6 +217,51 @@ class TestPerplexityCostCalculator:
         assert math.isclose(prompt_cost, 1000 * 1e-07, rel_tol=1e-10)
         assert math.isclose(completion_cost, 200 * 2e-07, rel_tol=1e-10)
 
+    def test_search_cost_uses_the_requested_search_context_size(self):
+        """
+        Regression: the per-query search fee is tiered by `search_context_size`
+        (e.g. sonar-pro: low=$0.006, medium=$0.01, high=$0.014/query). The fallback
+        manual-cost branch used to hard-code the "low" tier regardless of what
+        `web_search_options={"search_context_size": ...}` the request actually sent,
+        silently under-billing any medium/high-context web search.
+        """
+        litellm.model_cost["perplexity/sonar-pro"] = {
+            "litellm_provider": "perplexity",
+            "mode": "chat",
+            "input_cost_per_token": 1e-06,
+            "output_cost_per_token": 1e-06,
+            "search_context_cost_per_query": {
+                "search_context_size_low": 0.006,
+                "search_context_size_medium": 0.01,
+                "search_context_size_high": 0.014,
+            },
+        }
+        litellm.get_model_info.cache_clear()
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=200,
+            total_tokens=1200,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=1),
+        )
+        base_completion_cost = 200 * 1e-06
+
+        _, no_options_cost = perplexity_cost_per_token(model="sonar-pro", usage=usage)
+        _, low_cost = perplexity_cost_per_token(
+            model="sonar-pro", usage=usage, web_search_options={"search_context_size": "low"}
+        )
+        _, medium_cost = perplexity_cost_per_token(
+            model="sonar-pro", usage=usage, web_search_options={"search_context_size": "medium"}
+        )
+        _, high_cost = perplexity_cost_per_token(
+            model="sonar-pro", usage=usage, web_search_options={"search_context_size": "high"}
+        )
+
+        # No web_search_options sent keeps today's default: bill the low tier.
+        assert math.isclose(no_options_cost, base_completion_cost + 0.006, rel_tol=1e-10)
+        assert math.isclose(low_cost, base_completion_cost + 0.006, rel_tol=1e-10)
+        assert math.isclose(medium_cost, base_completion_cost + 0.01, rel_tol=1e-10)
+        assert math.isclose(high_cost, base_completion_cost + 0.014, rel_tol=1e-10)
+
     def test_provider_stated_cost_still_wins_inside_an_off_peak_window(self):
         """A response that carries Perplexity's own metered cost bills that cost whatever the
         window says; the caller strips it when the deployment carries custom pricing."""

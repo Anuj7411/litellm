@@ -443,6 +443,7 @@ def cost_per_token(
     request_model: str | None = None,  # original request model for router detection
     custom_model_info: OCRPricing | None = None,
     bedrock_model_info: ModelInfo | None = None,
+    standard_built_in_tools_params: StandardBuiltInToolsParams | None = None,
 ) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -780,7 +781,11 @@ def cost_per_token(
     elif custom_llm_provider == "tencent":
         return tencent_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "perplexity":
-        return perplexity_cost_per_token(model=model, usage=usage_block)
+        return perplexity_cost_per_token(
+            model=model,
+            usage=usage_block,
+            web_search_options=(standard_built_in_tools_params or {}).get("web_search_options"),
+        )
     elif custom_llm_provider == "xai":
         return xai_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "lemonade":
@@ -2048,6 +2053,7 @@ def completion_cost(
                     response=completion_response,
                     custom_model_info=_ocr_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                     bedrock_model_info=bedrock_model_info,
+                    standard_built_in_tools_params=standard_built_in_tools_params,
                 )
 
                 # Get additional costs from provider (e.g., routing fees, infrastructure costs)

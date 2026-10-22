@@ -4391,6 +4391,58 @@ def test_completion_cost_bills_interactions_google_search_per_query():
     assert cost > 3 * per_query_cost
 
 
+def test_completion_cost_bills_perplexity_web_search_at_the_requested_context_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Regression: completion_cost() never forwarded the request's
+    web_search_options (standard_built_in_tools_params) down into Perplexity's
+    manual-fallback cost branch, so every Perplexity web search was billed at
+    the "low" search_context_size rate no matter what the caller asked for.
+    """
+    model: Final = "perplexity/sonar-pro"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "perplexity",
+            "mode": "chat",
+            "input_cost_per_token": 1e-06,
+            "output_cost_per_token": 1e-06,
+            "search_context_cost_per_query": {
+                "search_context_size_low": 0.006,
+                "search_context_size_medium": 0.01,
+                "search_context_size_high": 0.014,
+            },
+        },
+    )
+    litellm.get_model_info.cache_clear()
+    usage: Final = Usage(
+        prompt_tokens=1000,
+        completion_tokens=200,
+        total_tokens=1200,
+        prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=1),
+    )
+    response: Final = ModelResponse(model=model, choices=[], usage=usage)
+    base_cost: Final = 1000 * 1e-06 + 200 * 1e-06
+
+    low_cost: Final = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="perplexity",
+        standard_built_in_tools_params={"web_search_options": {"search_context_size": "low"}},
+    )
+    high_cost: Final = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="perplexity",
+        standard_built_in_tools_params={"web_search_options": {"search_context_size": "high"}},
+    )
+
+    assert low_cost == pytest.approx(base_cost + 0.006)
+    assert high_cost == pytest.approx(base_cost + 0.014)
+
+
 def test_completion_cost_bills_interactions_video_output_at_video_rate():
     from litellm.types.interactions import InteractionsAPIResponse
 
