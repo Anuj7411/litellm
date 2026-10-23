@@ -519,6 +519,89 @@ def test_web_search_call_count_reads_dict_output_items(local_model_cost_map):
     )
 
 
+def _openai_responses_with_file_search_calls(model, num_calls):
+    from openai.types.responses.response_file_search_tool_call import (
+        ResponseFileSearchToolCall,
+    )
+
+    output = [
+        ResponseFileSearchToolCall(
+            id=f"fs_{i}",
+            type="file_search_call",
+            status="completed",
+            queries=["query"],
+        )
+        for i in range(num_calls)
+    ]
+    return ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        model=model,
+        object="response",
+        output=output,
+        parallel_tool_calls=False,
+        tool_choice="auto",
+        tools=[],
+    )
+
+
+def test_openai_responses_file_search_multiplied_by_call_count():
+    """
+    get_cost_for_file_search's OpenAI per-call branch was returned as-is regardless of how
+    many file_search_call items the Responses output carried, so N file searches in a single
+    turn billed the same as one. N calls must bill N x the per-call rate, and a single call
+    must still bill exactly once.
+    """
+    model = "gpt-5.1"
+    per_call = StandardBuiltInToolCostTracking.get_cost_for_file_search(file_search=FileSearchTool(type="file_search"))
+    standard_built_in_tools_params = StandardBuiltInToolsParams(file_search=FileSearchTool(type="file_search"))
+
+    for num_calls in (1, 5):
+        response = _openai_responses_with_file_search_calls(model, num_calls=num_calls)
+        cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+            model=model,
+            response_object=response,
+            usage=None,
+            custom_llm_provider="openai",
+            standard_built_in_tools_params=standard_built_in_tools_params,
+        )
+        assert cost == pytest.approx(num_calls * per_call), (
+            f"{num_calls} file searches must bill {num_calls} x ${per_call}, got ${cost}"
+        )
+
+
+def test_file_search_call_count_does_not_scale_azure_storage_cost():
+    """
+    Azure's file_search pricing is storage_gb x days, not per call. The call-count fix for the
+    OpenAI per-call branch must not leak into the Azure storage-based branches.
+    """
+    model = "gpt-4.1"
+    standard_built_in_tools_params = StandardBuiltInToolsParams(
+        file_search={"type": "file_search", "storage_gb": 2.0, "days": 3.0}
+    )
+
+    one_call = _openai_responses_with_file_search_calls(model, num_calls=1)
+    five_calls = _openai_responses_with_file_search_calls(model, num_calls=5)
+
+    cost_one = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        response_object=one_call,
+        usage=None,
+        custom_llm_provider="azure",
+        standard_built_in_tools_params=standard_built_in_tools_params,
+    )
+    cost_five = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        response_object=five_calls,
+        usage=None,
+        custom_llm_provider="azure",
+        standard_built_in_tools_params=standard_built_in_tools_params,
+    )
+
+    assert cost_one > 0.0
+    assert cost_one == pytest.approx(cost_five)
+
+
 # Note: File search integration test removed due to complex annotation detection logic
 # The unit tests in test_azure_assistant_cost_tracking.py provide comprehensive coverage
 

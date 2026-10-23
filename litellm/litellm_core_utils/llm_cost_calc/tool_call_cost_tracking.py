@@ -134,6 +134,7 @@ class StandardBuiltInToolCostTracking:
                     model=model,
                     custom_llm_provider=custom_llm_provider,
                     standard_built_in_tools_params=standard_built_in_tools_params,
+                    response_object=response_object,
                 )
             )
 
@@ -330,6 +331,7 @@ class StandardBuiltInToolCostTracking:
         model: str,
         custom_llm_provider: str | None,
         standard_built_in_tools_params: StandardBuiltInToolsParams,
+        response_object: object = None,
     ) -> float:
         """Handle file search cost calculation."""
         model_info: Final = StandardBuiltInToolCostTracking._safe_get_model_info(
@@ -347,7 +349,24 @@ class StandardBuiltInToolCostTracking:
             model_info=model_info_dict,
             storage_gb=storage_gb,
             days=days,
+            call_count=StandardBuiltInToolCostTracking._count_file_search_calls(response_object),
         )
+
+    @staticmethod
+    def _count_file_search_calls(response_object: object) -> int:
+        """
+        Number of file searches to bill for on the per-call pricing path.
+
+        Only ResponsesAPIResponse exposes individual file_search_call output items; chat-completions
+        responses only expose file_citation annotations with no count, so they floor to a single
+        billable search, matching _count_web_search_calls.
+        """
+        if not isinstance(response_object, ResponsesAPIResponse):
+            return 1
+        count: Final = sum(
+            1 for output_item in response_object.output if _output_item_type(output_item) == "file_search_call"
+        )
+        return max(count, 1)
 
     @staticmethod
     def _handle_azure_assistant_costs(
@@ -690,12 +709,16 @@ class StandardBuiltInToolCostTracking:
         model_info: dict | None = None,
         storage_gb: float | None = None,
         days: float | None = None,
+        call_count: int = 1,
     ) -> float:
         """ "
         OpenAI: $2.50/1k calls
         Azure: $0.1 USD per 1 GB/Day (storage-based pricing)
 
         Doc: https://platform.openai.com/docs/pricing#built-in-tools
+
+        `call_count` only scales the per-call branches (OpenAI-style); the Azure
+        storage-based branches bill by storage_gb * days, independent of call count.
         """
         if file_search is None:
             return 0.0
@@ -705,7 +728,7 @@ class StandardBuiltInToolCostTracking:
             if storage_gb and days:
                 return storage_gb * days * model_info["file_search_cost_per_gb_per_day"]
         elif model_info and "file_search_cost_per_1k_calls" in model_info:
-            return model_info["file_search_cost_per_1k_calls"]
+            return model_info["file_search_cost_per_1k_calls"] * call_count
 
         # Azure has storage-based pricing for file search
         if provider == "azure":
@@ -717,7 +740,7 @@ class StandardBuiltInToolCostTracking:
             return 0.0
 
         # Default to OpenAI pricing (per-call based)
-        return OPENAI_FILE_SEARCH_COST_PER_1K_CALLS
+        return OPENAI_FILE_SEARCH_COST_PER_1K_CALLS * call_count
 
     @staticmethod
     def get_cost_for_vector_store(
