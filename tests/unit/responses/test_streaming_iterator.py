@@ -851,6 +851,24 @@ def test_stamp_responses_usage_cost_stamps_computed_cost():
     logging_obj.response_cost_calculator.assert_called_once_with(result=response)
 
 
+def test_stamp_responses_usage_cost_stamps_confirmed_zero_cost():
+    """Regression for #43946: a deployment priced at an explicit $0 must still get
+    usage.cost=0.0 on a streamed Responses API call, the same way a non-streamed call's
+    `_hidden_params["response_cost"]` is 0.0 rather than absent. Collapsing a confirmed-zero
+    cost into "not stamped" makes a free call indistinguishable from one the calculator
+    could not price at all."""
+    from litellm.responses.streaming_iterator import stamp_responses_usage_cost
+
+    response = _responses_api_response_with_usage()
+    logging_obj = Mock(spec=LiteLLMLoggingObj)
+    logging_obj.response_cost_calculator.return_value = 0.0
+
+    stamp_responses_usage_cost(response, logging_obj)
+
+    assert getattr(response.usage, "cost", None) == 0.0
+    logging_obj.response_cost_calculator.assert_called_once_with(result=response)
+
+
 def test_stamp_responses_usage_cost_keeps_provider_reported_cost():
     from litellm.responses.streaming_iterator import stamp_responses_usage_cost
 

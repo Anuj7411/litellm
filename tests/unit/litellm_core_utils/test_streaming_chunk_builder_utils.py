@@ -1128,6 +1128,43 @@ def test_cost_field_in_usage_chunks():
     assert usage.completion_tokens == 5
 
 
+def test_stamp_streaming_usage_cost_stamps_confirmed_zero_cost():
+    """Regression for #43946: a deployment priced at an explicit $0 (e.g.
+    input_cost_per_token=0, output_cost_per_token=0) must still get usage.cost=0.0 on a stream,
+    the same way the non-streamed call's `_hidden_params["response_cost"]` is 0.0. Treating a
+    confirmed-zero cost the same as "couldn't compute" makes a free call indistinguishable from
+    an unpriced one on a stream."""
+    from litellm.litellm_core_utils.streaming_chunk_builder_utils import _stamp_streaming_usage_cost
+    from litellm.types.utils import ModelResponse
+
+    usage = Usage(completion_tokens=2, prompt_tokens=8, total_tokens=10)
+    response = ModelResponse(model="gpt-4o-mini")
+    logging_obj = MagicMock()
+    logging_obj.response_cost_calculator.return_value = 0.0
+
+    _stamp_streaming_usage_cost(usage, response, logging_obj)
+
+    assert usage.cost == 0.0
+    assert response._hidden_params["response_cost"] == 0.0
+
+
+def test_stamp_streaming_usage_cost_skips_a_calculation_that_failed():
+    """A calculator that cannot price the request returns None, not 0.0; that must still be
+    left unstamped so it stays distinguishable from a confirmed-free call."""
+    from litellm.litellm_core_utils.streaming_chunk_builder_utils import _stamp_streaming_usage_cost
+    from litellm.types.utils import ModelResponse
+
+    usage = Usage(completion_tokens=2, prompt_tokens=8, total_tokens=10)
+    response = ModelResponse(model="gpt-4o-mini")
+    logging_obj = MagicMock()
+    logging_obj.response_cost_calculator.return_value = None
+
+    _stamp_streaming_usage_cost(usage, response, logging_obj)
+
+    assert getattr(usage, "cost", None) is None
+    assert "response_cost" not in response._hidden_params
+
+
 def test_stream_chunk_builder_tolerates_trailing_chunk_without_choices():
     """Regression for https://github.com/BerriAI/litellm/issues/32051
 
