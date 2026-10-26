@@ -106,10 +106,13 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
     if num_search_queries > 0 and search_cost_value is not None:
         # Handle both dict and float formats
         if isinstance(search_cost_value, dict):
-            # search_context_cost_per_query stores the per-request price in USD
-            # (e.g. sonar low = $0.005/request). Use it directly, matching the
-            # gemini cost calculator which reads the same field per request.
-            search_cost_per_query = _safe_float_cast(search_cost_value.get("search_context_size_low", 0))
+            # search_context_cost_per_query stores the per-request price in USD, tiered by
+            # search_context_size (e.g. sonar: low $0.005, medium $0.008, high $0.012/request).
+            # This fallback runs when Perplexity's own usage.cost is absent, so the request's
+            # actual size isn't available here; default to "medium", matching every other
+            # caller of this field (StandardBuiltInToolCostTracking.get_default_cost_for_web_search,
+            # the gemini and groq cost calculators) instead of under-billing at the "low" rate.
+            search_cost_per_query = _safe_float_cast(search_cost_value.get("search_context_size_medium", 0))
         else:
             search_cost_per_query = _safe_float_cast(search_cost_value)
         search_cost: Final = num_search_queries * search_cost_per_query

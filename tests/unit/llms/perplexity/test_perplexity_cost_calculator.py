@@ -90,6 +90,40 @@ class TestPerplexityCostCalculator:
             assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
             assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
 
+    def test_manual_search_cost_uses_medium_tier_not_low(self):
+        """
+        Regression: the manual fallback (used when Perplexity's own usage.cost is absent)
+        hardcoded the "low" search_context_size tier for every request, regardless of what
+        the request actually asked for. Every other reader of search_context_cost_per_query
+        in this codebase (StandardBuiltInToolCostTracking.get_default_cost_for_web_search,
+        the gemini and groq cost calculators) defaults to "medium" when the size is unknown.
+        With a model whose low/medium/high prices differ, billing at "low" silently
+        under-reports the search fee; this asserts the "medium" rate is billed instead.
+        """
+        litellm.model_cost["perplexity/sonar-tiered-search-test"] = {
+            "litellm_provider": "perplexity",
+            "mode": "chat",
+            "input_cost_per_token": 1e-06,
+            "output_cost_per_token": 1e-06,
+            "search_context_cost_per_query": {
+                "search_context_size_low": 0.005,
+                "search_context_size_medium": 0.008,
+                "search_context_size_high": 0.012,
+            },
+        }
+        usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=1),
+        )
+
+        _, completion_cost = perplexity_cost_per_token(model="sonar-tiered-search-test", usage=usage)
+
+        expected_completion_cost = (50 * 1e-06) + 0.008
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
+        # Pre-fix this computed (50 * 1e-06) + 0.005 -- the "low" tier price.
+
     def test_uses_perplexity_provided_cost_when_available(self):
         """
         Test that when Perplexity provides pre-calculated cost in usage.cost.total_cost,
@@ -153,7 +187,7 @@ class TestPerplexityCostCalculator:
             "output_cost_per_token": 1e-06,
             "output_cost_per_reasoning_token": 3e-06,
             "citation_cost_per_token": 2e-06,
-            "search_context_cost_per_query": {"search_context_size_low": 0.005},
+            "search_context_cost_per_query": {"search_context_size_low": 0.003, "search_context_size_medium": 0.005},
             "off_peak_pricing": off_peak_pricing,
         }
 
