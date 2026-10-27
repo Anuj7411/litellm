@@ -106,7 +106,13 @@ class BaseRerankConfig(ABC):
         model_info: ModelInfo | None = None,
     ) -> tuple[float, float]:
         """
-        Calculates the cost per query for a given rerank model.
+        Calculates the cost for a given rerank model.
+
+        Prices per query when the model has 'input_cost_per_query' and the response
+        reported 'search_units'. Falls back to pricing per token when the model
+        instead has 'input_cost_per_token' and the response reported 'total_tokens'
+        (e.g. together_ai, novita rerank models, which the cost map prices by token
+        and never set 'input_cost_per_query').
 
         Input:
             - model: str, the model name without provider prefix
@@ -118,19 +124,17 @@ class BaseRerankConfig(ABC):
             Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
         """
 
-        if (
-            model_info is None
-            or "input_cost_per_query" not in model_info
-            or model_info["input_cost_per_query"] is None
-            or billed_units is None
-        ):
+        if model_info is None or billed_units is None:
             return 0.0, 0.0
 
+        input_cost_per_query: Final = model_info.get("input_cost_per_query")
         search_units: Final = billed_units.get("search_units")
+        if input_cost_per_query is not None and search_units is not None:
+            return input_cost_per_query * search_units, 0.0
 
-        if search_units is None:
-            return 0.0, 0.0
+        input_cost_per_token: Final = model_info.get("input_cost_per_token")
+        total_tokens: Final = billed_units.get("total_tokens")
+        if input_cost_per_token is not None and total_tokens is not None:
+            return input_cost_per_token * total_tokens, 0.0
 
-        prompt_cost: Final = model_info["input_cost_per_query"] * search_units
-
-        return prompt_cost, 0.0
+        return 0.0, 0.0
