@@ -6046,6 +6046,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 input_cost_per_character=_model_info.get(
                     "input_cost_per_character", None
                 ),
+                input_cost_per_character_above_128k_tokens=_model_info.get(
+                    "input_cost_per_character_above_128k_tokens", None
+                ),
                 input_cost_per_token_above_128k_tokens=_model_info.get(
                     "input_cost_per_token_above_128k_tokens", None
                 ),
