@@ -200,6 +200,22 @@ class AmazonNovaCanvasConfig:
         return model_response
 
     @classmethod
+    def _get_pricing_tier(cls, optional_params: Dict[str, Any]) -> str:
+        """
+        Nova Canvas bills per image on a quality (standard/premium) x resolution
+        (<=1024x1024 vs <=2048x2048) grid - e.g. premium at 2048x2048 costs twice
+        standard at 1024x1024. AWS defaults to standard quality at 1024x1024 when
+        the caller sets neither.
+
+        Ref: https://aws.amazon.com/bedrock/pricing/
+        """
+        quality = optional_params.get("quality") or "standard"
+        width = optional_params.get("width") or 1024
+        height = optional_params.get("height") or 1024
+        resolution = "high-res" if max(width, height) > 1024 else "standard-res"
+        return f"{quality}/{resolution}"
+
+    @classmethod
     def cost_calculator(
         cls,
         model: str,
@@ -207,11 +223,22 @@ class AmazonNovaCanvasConfig:
         size: Optional[str] = None,
         optional_params: Optional[dict] = None,
     ) -> float:
+        optional_params = optional_params or {}
+        pricing_tier = cls._get_pricing_tier(optional_params)
+
         get_model_info = get_cached_model_info()
-        model_info = get_model_info(
-            model=model,
-            custom_llm_provider="bedrock",
-        )
+        try:
+            model_info = get_model_info(
+                model=f"{pricing_tier}/{model}",
+                custom_llm_provider="bedrock",
+            )
+        except Exception:
+            # Tier-specific pricing not in the cost map (e.g. a newer Nova Canvas
+            # model id not yet added) - fall back to the model's flat per-image rate.
+            model_info = get_model_info(
+                model=model,
+                custom_llm_provider="bedrock",
+            )
 
         output_cost_per_image: float = model_info.get("output_cost_per_image") or 0.0
         num_images: int = 0
