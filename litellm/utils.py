@@ -7025,7 +7025,14 @@ def get_model_info_helper(
                         e,
                     )
 
-        if not catalog_only and custom_llm_provider == "huggingface":
+        has_registered_huggingface_pricing: Final = (
+            custom_llm_provider == "huggingface"
+            and _first_registered_match(
+                _model_cost_lookup_order(model, potential_model_names), model_cost_custom_llm_provider
+            )[1]
+            is not None
+        )
+        if not catalog_only and custom_llm_provider == "huggingface" and not has_registered_huggingface_pricing:
             max_tokens: Final = _get_max_position_embeddings(model_name=model)
             return ModelInfoBase(
                 key=model,

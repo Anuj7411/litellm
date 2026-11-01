@@ -388,6 +388,54 @@ def test_get_model_info_internal_failure_is_not_reported_as_unmapped() -> None:
     assert not isinstance(exc_info.value, litellm.ModelNotMappedError)
 
 
+def test_get_model_info_huggingface_respects_registered_pricing(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    custom_llm_provider="huggingface" short-circuits to a zero-cost/"chat"-mode
+    placeholder before consulting litellm.model_cost at all, so a huggingface
+    model with real pricing registered (e.g. via litellm.register_model, or any
+    other route that lands an entry in litellm.model_cost) silently billed $0
+    instead of its configured rate.
+    """
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "my-hf-model",
+        {
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+            "litellm_provider": "huggingface",
+            "mode": "chat",
+        },
+    )
+
+    info: Final = litellm.get_model_info(model="my-hf-model", custom_llm_provider="huggingface")
+    assert info["input_cost_per_token"] == 0.001
+    assert info["output_cost_per_token"] == 0.002
+
+    from litellm.cost_calculator import cost_per_token
+
+    prompt_cost, completion_cost = cost_per_token(
+        model="my-hf-model",
+        prompt_tokens=1000,
+        completion_tokens=500,
+        custom_llm_provider="huggingface",
+    )
+    assert prompt_cost == 1.0
+    assert completion_cost == 1.0
+
+
+def test_get_model_info_huggingface_unregistered_model_still_defaults_to_zero_cost(
+    local_model_cost_map: None,
+) -> None:
+    """A huggingface model absent from litellm.model_cost keeps the long-standing
+    zero-cost/"chat"-mode placeholder; only a registered entry should change the price."""
+    info: Final = litellm.get_model_info(model="totally-unmapped-hf-model", custom_llm_provider="huggingface")
+    assert info["input_cost_per_token"] == 0
+    assert info["output_cost_per_token"] == 0
+    assert info["mode"] == "chat"
+
+
 def test_check_provider_match_azure_ai_allows_openai_and_azure():
     """
     Test that azure_ai provider can match openai and azure models.
