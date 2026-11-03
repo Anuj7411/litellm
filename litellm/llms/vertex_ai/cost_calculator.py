@@ -1,13 +1,15 @@
 # What is this?
 ## Cost calculation for Google AI Studio / Vertex AI models
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
 import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     generic_cost_per_token,
+    get_cost_per_unit,
     get_vertex_regional_endpoint_uplift,
     is_above_128k,
+    parse_prompt_tokens_details,
 )
 from litellm.types.utils import ModelInfo, Usage
 
@@ -181,18 +183,33 @@ def _handle_128k_pricing(
 ) -> tuple[float, float]:
     ## CALCULATE INPUT COST
     input_cost_per_token_above_128k_tokens: Final = model_info.get("input_cost_per_token_above_128k_tokens")
-    output_cost_per_token_above_128k_tokens = model_info.get("output_cost_per_token_above_128k_tokens")
+    output_cost_per_token_above_128k_tokens: Final = model_info.get("output_cost_per_token_above_128k_tokens")
 
     prompt_tokens: Final = usage.prompt_tokens
     completion_tokens: Final = usage.completion_tokens
 
     if is_above_128k(tokens=prompt_tokens) and input_cost_per_token_above_128k_tokens is not None:
-        prompt_cost = prompt_tokens * input_cost_per_token_above_128k_tokens
+        input_rate = input_cost_per_token_above_128k_tokens
     else:
-        prompt_cost = prompt_tokens * (model_info["input_cost_per_token"] or 0.0)
+        input_rate = model_info["input_cost_per_token"] or 0.0
+
+    # Cached tokens bill at the cache rate, not the (possibly above-128k) input rate; without
+    # this, a cache hit was billed as if it were fresh input.
+    prompt_tokens_details: Final = parse_prompt_tokens_details(usage)
+    cache_read_tokens: Final = prompt_tokens_details["cache_hit_tokens"]
+    cache_creation_tokens: Final = prompt_tokens_details["cache_creation_tokens"]
+    billable_tokens: Final = max(prompt_tokens - cache_read_tokens - cache_creation_tokens, 0)
+    cache_read_rate: Final = cast(  # cast-ok: default_value is a float, so this can't be None
+        float, get_cost_per_unit(model_info, "cache_read_input_token_cost", input_rate)
+    )
+    cache_creation_rate: Final = cast(  # cast-ok: default_value is a float, so this can't be None
+        float, get_cost_per_unit(model_info, "cache_creation_input_token_cost", input_rate)
+    )
+    prompt_cost = (
+        billable_tokens * input_rate + cache_read_tokens * cache_read_rate + cache_creation_tokens * cache_creation_rate
+    )
 
     ## CALCULATE OUTPUT COST
-    output_cost_per_token_above_128k_tokens = model_info.get("output_cost_per_token_above_128k_tokens")
     if is_above_128k(tokens=completion_tokens) and output_cost_per_token_above_128k_tokens is not None:
         completion_cost = completion_tokens * output_cost_per_token_above_128k_tokens
     else:

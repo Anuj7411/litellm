@@ -2533,6 +2533,74 @@ def test_vertex_uplift_composes_with_above_128k_pricing(monkeypatch):
     assert regional_completion == pytest.approx(global_completion * 1.10, rel=1e-9)
 
 
+def test_above_128k_pricing_discounts_cached_tokens(monkeypatch):
+    """A model priced with the legacy input_cost_per_token_above_128k_tokens key must still
+    bill cache-read and cache-creation tokens at their own rates, the same discount every
+    other vertex_ai/gemini model gets from generic_cost_per_token. Regression test for a bug
+    where _handle_128k_pricing billed the entire prompt_tokens count, cache hits included, at
+    the flat (or above-128k) input rate."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.get_model_cost_map(url=""),
+            "vertex_ai/fake-128k-cache-model": {
+                "litellm_provider": "vertex_ai",
+                "mode": "chat",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 2e-06,
+                "cache_read_input_token_cost": 2.5e-07,
+                "cache_creation_input_token_cost": 5e-07,
+                "input_cost_per_token_above_128k_tokens": 2e-06,
+                "output_cost_per_token_above_128k_tokens": 4e-06,
+            },
+        },
+    )
+
+    usage = Usage(
+        prompt_tokens=1_000,
+        completion_tokens=10,
+        total_tokens=1_010,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=900),
+    )
+    prompt_cost, _ = cost_per_token(
+        model="fake-128k-cache-model",
+        custom_llm_provider="vertex_ai",
+        usage_object=usage,
+    )
+
+    fresh_tokens = 1_000 - 900
+    assert prompt_cost == pytest.approx(fresh_tokens * 1e-06 + 900 * 2.5e-07, rel=1e-9)
+
+    usage_with_cache_write = Usage(
+        prompt_tokens=1_000,
+        completion_tokens=10,
+        total_tokens=1_010,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=0, cache_creation_tokens=400),
+    )
+    write_prompt_cost, _ = cost_per_token(
+        model="fake-128k-cache-model",
+        custom_llm_provider="vertex_ai",
+        usage_object=usage_with_cache_write,
+    )
+    assert write_prompt_cost == pytest.approx((1_000 - 400) * 1e-06 + 400 * 5e-07, rel=1e-9)
+
+    # The above-128k threshold still applies to the uncached portion once the prompt crosses it.
+    above_threshold_usage = Usage(
+        prompt_tokens=200_000,
+        completion_tokens=10,
+        total_tokens=200_010,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=150_000),
+    )
+    above_threshold_prompt_cost, _ = cost_per_token(
+        model="fake-128k-cache-model",
+        custom_llm_provider="vertex_ai",
+        usage_object=above_threshold_usage,
+    )
+    assert above_threshold_prompt_cost == pytest.approx(50_000 * 2e-06 + 150_000 * 2.5e-07, rel=1e-9)
+
+
 def test_cost_discount_vertex_ai(monkeypatch):
     """
     Test that cost discount is applied correctly for Vertex AI provider
