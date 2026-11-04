@@ -126,6 +126,21 @@ class TestAzureAssistantCostTracking:
             abs(cost - expected_cost) < 0.0001
         ), f"Expected {expected_cost}, got {cost}"
 
+    def test_azure_computer_use_cost_calculation_hardcoded_dollars(self):
+        """
+        Regression test: Azure's published rate is $0.003 / 1K input tokens and
+        $0.012 / 1K output tokens.
+        See https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/
+        Assert against hardcoded dollar amounts (not the constants under test) so a
+        1000x unit mistake in the constants' default values cannot slip through.
+        """
+        cost = StandardBuiltInToolCostTracking.get_cost_for_computer_use(
+            input_tokens=1000,
+            output_tokens=500,
+            provider="azure",
+        )
+        assert abs(cost - 0.009) < 0.0001, f"Expected $0.009, got {cost}"
+
     def test_openai_computer_use_free(self):
         """Test OpenAI computer use has no separate charges."""
         cost = StandardBuiltInToolCostTracking.get_cost_for_computer_use(
