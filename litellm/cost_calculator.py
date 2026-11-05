@@ -3349,7 +3349,7 @@ def _batch_prompt_cost(
     model_info: ModelInfo,
     input_rate: float,
     batch_cache_read_rate: float | None,
-    cache_creation_rate: float | None,
+    batch_cache_creation_rate: float | None,
     cache_creation_rates_by_ttl: Mapping[str, float],
 ) -> float:
     details: Final = parse_prompt_tokens_details(usage)
@@ -3357,6 +3357,11 @@ def _batch_prompt_cost(
         _standard_rate(model_info, "cache_read_input_token_cost", usage.prompt_tokens)
         if batch_cache_read_rate is None
         else batch_cache_read_rate
+    )
+    cache_creation_rate: Final = (
+        _standard_rate(model_info, "cache_creation_input_token_cost", usage.prompt_tokens)
+        if batch_cache_creation_rate is None
+        else batch_cache_creation_rate
     )
     cached_tokens: Final = details["cache_hit_tokens"] if cache_read_rate is not None else 0
     cached_audio_tokens: Final = details["cache_hit_audio_tokens"] if cache_read_rate is not None else 0

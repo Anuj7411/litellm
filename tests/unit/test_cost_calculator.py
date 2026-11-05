@@ -4602,6 +4602,42 @@ def test_batch_cost_calculator_bills_long_context_cached_tokens_at_the_standard_
     assert prompt_cost == pytest.approx(300_000 * 2.5e-7)
 
 
+def _cache_write_batch_usage() -> Usage:
+    return Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        total_tokens=1000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cache_creation_tokens=1000),
+    )
+
+
+@pytest.mark.parametrize(
+    ("cache_write_batch_price", "expected_rate"),
+    [
+        pytest.param(None, 5e-7, id="no-batch-cache-write-price-bills-the-standard-cache-write-price"),
+        pytest.param(2e-7, 2e-7, id="an-explicit-batch-cache-write-price-still-wins"),
+    ],
+)
+def test_batch_cost_calculator_bills_cache_write_tokens_at_the_standard_cache_price_when_the_row_has_no_batch_cache_price(
+    cache_write_batch_price: float | None, expected_rate: float
+) -> None:
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 3e-7,
+        "cache_creation_input_token_cost": 5e-7,
+        "input_cost_per_token_batches": 1.5e-7,
+        "cache_creation_input_token_cost_batches": cache_write_batch_price,
+    }
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_cache_write_batch_usage(),
+        model="gemini-2.5-flash",
+        custom_llm_provider="vertex_ai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(1000 * expected_rate)
+
+
 def _batch_and_standard_cached_audio_cost(model: str, provider: str) -> tuple[str, float, float]:
     batch_prompt_cost, _ = batch_cost_calculator(_cached_audio_batch_usage(), model, provider)
     standard_prompt_cost, _ = litellm.cost_per_token(
@@ -6397,7 +6433,7 @@ def test_batch_cost_calculator_bills_cache_write_tokens_at_the_flat_batch_cache_
     assert prompt_cost == pytest.approx(100 * 1e-6 + 900 * 1.25e-6)
 
 
-def test_batch_cost_calculator_bills_cache_write_tokens_at_the_batch_input_rate_without_a_cache_write_batch_rate(
+def test_batch_cost_calculator_bills_cache_write_tokens_at_the_standard_cache_write_rate_without_a_cache_write_batch_rate(
     _tiered_batch_models: None,
 ) -> None:
     from litellm.cost_calculator import batch_cost_calculator
@@ -6406,7 +6442,7 @@ def test_batch_cost_calculator_bills_cache_write_tokens_at_the_batch_input_rate_
         usage=_cache_write_usage(300_048, 300_045, 4), model=_FLAT_CACHE_BATCH_MODEL, custom_llm_provider="openai"
     )
 
-    assert prompt_cost == pytest.approx(300_048 * 3e-6)
+    assert prompt_cost == pytest.approx(3 * 3e-6 + 300_045 * 2.5e-6)
 
 
 _TWELVE_HOUR_BATCH_MODEL_INFO: Final = cast(
