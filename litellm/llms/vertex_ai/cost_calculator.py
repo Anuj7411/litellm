@@ -192,8 +192,11 @@ def _handle_128k_pricing(
         prompt_cost = prompt_tokens * (model_info["input_cost_per_token"] or 0.0)
 
     ## CALCULATE OUTPUT COST
+    # The long-context tier is determined by the size of the request's context
+    # (prompt_tokens), and applies to both input and output pricing - not by
+    # the size of the completion itself.
     output_cost_per_token_above_128k_tokens = model_info.get("output_cost_per_token_above_128k_tokens")
-    if is_above_128k(tokens=completion_tokens) and output_cost_per_token_above_128k_tokens is not None:
+    if is_above_128k(tokens=prompt_tokens) and output_cost_per_token_above_128k_tokens is not None:
         completion_cost = completion_tokens * output_cost_per_token_above_128k_tokens
     else:
         completion_cost = completion_tokens * (model_info["output_cost_per_token"] or 0.0)
