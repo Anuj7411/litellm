@@ -618,3 +618,34 @@ def test_get_model_info_huggingface_models(monkeypatch):
         providers=["huggingface"],
         **info,
     )
+
+
+def test_get_model_info_huggingface_honors_registered_price():
+    """
+    A huggingface-provider model registered with its own price (e.g. a custom TEI rerank
+    deployment's input_cost_per_query via litellm.register_model) must be billed at that
+    price, not shadowed by the provider's zero-cost chat default.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/45975
+    """
+    litellm.register_model({"my-tei-reranker": {"input_cost_per_query": 0.001}})
+
+    info = litellm.get_model_info(model="my-tei-reranker", custom_llm_provider="huggingface")
+    assert info["input_cost_per_query"] == 0.001
+
+    from litellm.cost_calculator import rerank_cost
+
+    assert rerank_cost(
+        model="my-tei-reranker",
+        custom_llm_provider="huggingface",
+        billed_units={"search_units": 1},
+    ) == (0.001, 0.0)
+
+
+def test_get_model_info_huggingface_unregistered_model_still_defaults_to_zero_cost(monkeypatch):
+    """An unregistered huggingface model keeps the existing zero-cost chat default."""
+    with respx.mock(assert_all_called=False) as huggingface:
+        huggingface.get(host="huggingface.co").mock(side_effect=httpx.ConnectError("huggingface.co is unreachable"))
+        info = litellm.get_model_info(model="some/unregistered-model", custom_llm_provider="huggingface")
+    assert info["input_cost_per_token"] == 0
+    assert info["output_cost_per_token"] == 0

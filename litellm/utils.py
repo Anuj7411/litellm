@@ -7262,7 +7262,30 @@ def get_model_info_helper(
                         e,
                     )
 
-        if not catalog_only and custom_llm_provider == "huggingface":
+        """
+        Check if: (in order of specificity)
+        1. 'custom_llm_provider/model' in litellm.model_cost. Checks "groq/llama3-8b-8192" if model="llama3-8b-8192" and custom_llm_provider="groq"
+        2. 'model' in litellm.model_cost. Checks "gemini-1.5-pro-002" in  litellm.model_cost if model="gemini-1.5-pro-002" and custom_llm_provider=None
+        3. 'region_free_combined_model_name' in litellm.model_cost. Checks "bedrock_mantle/anthropic.claude-opus-5-5" if
+           model="bedrock_mantle/us-east-1/anthropic.claude-opus-5-5", before 4 reaches the bare Bedrock row. Same as 1 for every other provider.
+        4. 'split_model' in litellm.model_cost. Checks "au.anthropic.claude-opus-4-8" in litellm.model_cost if model="bedrock/au.anthropic.claude-opus-4-8"
+        5. 'combined_stripped_model_name' in litellm.model_cost. Checks if 'gemini/gemini-1.5-flash' in model map, if 'gemini/gemini-1.5-flash-001' given.
+        6. 'stripped_model_name' in litellm.model_cost. Checks if 'ft:gpt-3.5-turbo' in model map, if 'ft:gpt-3.5-turbo:my-org:custom_suffix:id' given.
+        7. 'provider_prefixed_model_name' in litellm.model_cost, for providers whose own model ids repeat the
+           litellm provider name. Checks "perplexity/perplexity/glm-5.2" if model="perplexity/glm-5.2" and
+           custom_llm_provider="perplexity", where 1-6 all read the leading "perplexity/" as the litellm prefix
+           and strip it. Tried last so no model that already resolves through 1-6 can change.
+        """
+        lookup: Final = _first_registered_match(
+            _model_cost_lookup_order(model, potential_model_names), model_cost_custom_llm_provider
+        )
+
+        # huggingface has no shared cost-map entries of its own, so a model with no registered
+        # match (the common case) gets this zero-cost chat default instead of raising. A model
+        # that *is* registered - e.g. via litellm.register_model, or a deployment's own
+        # input_cost_per_query/model_info pricing - must still be billed at its configured rate,
+        # not shadowed by this default (https://github.com/BerriAI/litellm/issues/45975).
+        if not catalog_only and custom_llm_provider == "huggingface" and lookup[1] is None:
             max_tokens: Final = _get_max_position_embeddings(model_name=model)
             return ModelInfoBase(
                 key=model,
@@ -7285,24 +7308,6 @@ def get_model_info_helper(
                 supports_pdf_input=None,
             )
         else:
-            """
-            Check if: (in order of specificity)
-            1. 'custom_llm_provider/model' in litellm.model_cost. Checks "groq/llama3-8b-8192" if model="llama3-8b-8192" and custom_llm_provider="groq"
-            2. 'model' in litellm.model_cost. Checks "gemini-1.5-pro-002" in  litellm.model_cost if model="gemini-1.5-pro-002" and custom_llm_provider=None
-            3. 'region_free_combined_model_name' in litellm.model_cost. Checks "bedrock_mantle/anthropic.claude-opus-5-5" if
-               model="bedrock_mantle/us-east-1/anthropic.claude-opus-5-5", before 4 reaches the bare Bedrock row. Same as 1 for every other provider.
-            4. 'split_model' in litellm.model_cost. Checks "au.anthropic.claude-opus-4-8" in litellm.model_cost if model="bedrock/au.anthropic.claude-opus-4-8"
-            5. 'combined_stripped_model_name' in litellm.model_cost. Checks if 'gemini/gemini-1.5-flash' in model map, if 'gemini/gemini-1.5-flash-001' given.
-            6. 'stripped_model_name' in litellm.model_cost. Checks if 'ft:gpt-3.5-turbo' in model map, if 'ft:gpt-3.5-turbo:my-org:custom_suffix:id' given.
-            7. 'provider_prefixed_model_name' in litellm.model_cost, for providers whose own model ids repeat the
-               litellm provider name. Checks "perplexity/perplexity/glm-5.2" if model="perplexity/glm-5.2" and
-               custom_llm_provider="perplexity", where 1-6 all read the leading "perplexity/" as the litellm prefix
-               and strip it. Tried last so no model that already resolves through 1-6 can change.
-            """
-
-            lookup: Final = _first_registered_match(
-                _model_cost_lookup_order(model, potential_model_names), model_cost_custom_llm_provider
-            )
             key: str | None = lookup[0]
             _model_info: dict[str, Any] | None = lookup[1]
 
