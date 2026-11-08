@@ -294,11 +294,10 @@ class TestVertexAIGeminiImageEditTransformation:
 
         model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="vertex_ai")
         flat_rate_cost: Final = model_info["output_cost_per_image"] * len(image_response.data)
-        expected_token_cost: Final = (
-            image_response.usage.output_tokens * model_info["output_cost_per_image_token"]
-        )
+        expected_output_cost: Final = image_response.usage.output_tokens * model_info["output_cost_per_image_token"]
+        expected_input_cost: Final = image_response.usage.input_tokens * model_info["input_cost_per_token"]
 
-        assert billed_cost == pytest.approx(expected_token_cost)
+        assert billed_cost == pytest.approx(expected_output_cost + expected_input_cost)
         assert billed_cost > flat_rate_cost
 
     def test_transform_image_edit_request_without_image_raises(self) -> None:
