@@ -230,6 +230,77 @@ class TestVertexAIGeminiImageEditTransformation:
             "utf-8"
         )
 
+    def test_transform_image_edit_response_bills_real_usage_not_the_flat_per_image_rate(self) -> None:
+        """Regression test: Vertex AI Gemini image edits never read ``usageMetadata`` off the
+        response, so ``ImageResponse.usage`` stayed None and the cost calculator always fell back
+        to the flat ``output_cost_per_image`` rate, unlike image *generation* on the same model,
+        which bills from the real token counts when the response reports them. An edit whose output
+        uses far more image tokens than the model's flat price assumes must bill more than that flat
+        rate once usage is wired through.
+        """
+        model: Final = "gemini-2.5-flash-image"
+        response_payload = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "inlineData": {
+                                    "mimeType": "image/png",
+                                    "data": base64.b64encode(b"image-one").decode("utf-8"),
+                                }
+                            }
+                        ]
+                    }
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 1300,
+                "candidatesTokenCount": 4000,
+                "totalTokenCount": 5300,
+                "promptTokensDetails": [
+                    {"modality": "TEXT", "tokenCount": 10},
+                    {"modality": "IMAGE", "tokenCount": 1290},
+                ],
+            },
+        }
+
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.json.return_value = response_payload
+        mock_response.status_code = 200
+        mock_response.headers = {}
+
+        image_response = self.config.transform_image_edit_response(
+            model=f"vertex_ai/{model}",
+            raw_response=mock_response,
+            logging_obj=self.logging_obj,
+        )
+
+        assert image_response.usage is not None
+        assert image_response.usage.input_tokens == 1300
+        assert image_response.usage.output_tokens == 4000
+        assert image_response.usage.total_tokens == 5300
+        assert image_response.usage.input_tokens_details.image_tokens == 1290
+        assert image_response.usage.input_tokens_details.text_tokens == 10
+
+        from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
+
+        billed_cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+            model=model,
+            completion_response=image_response,
+            custom_llm_provider="vertex_ai",
+            call_type="image_edit",
+        )
+
+        model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="vertex_ai")
+        flat_rate_cost: Final = model_info["output_cost_per_image"] * len(image_response.data)
+        expected_token_cost: Final = (
+            image_response.usage.output_tokens * model_info["output_cost_per_image_token"]
+        )
+
+        assert billed_cost == pytest.approx(expected_token_cost)
+        assert billed_cost > flat_rate_cost
+
     def test_transform_image_edit_request_without_image_raises(self) -> None:
         """Test that missing image raises BadRequestError with 400 status code"""
         optional_params = {}
