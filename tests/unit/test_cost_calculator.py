@@ -7873,6 +7873,23 @@ def test_together_ai_qwen_completion_cost():
     assert response == "together-ai-41.1b-80b"
 
 
+def test_together_ai_fractional_param_count_picks_correct_category():
+    """
+    A fractional parameter count (e.g. 1.5B, 13.5B) is common in together_ai model
+    names (Qwen2-1.5B, Qwen2.5-13.5B, ...). The category regex used to match only the
+    digits after the decimal point, so "13.5b" was read as 5B and landed in the
+    4.1B-8B tier instead of 8.1B-21B.
+    """
+    assert (
+        get_model_params_and_category(model_name="some-vendor/model-1.5b-instruct", call_type=CallTypes.completion)
+        == "together-ai-up-to-4b"
+    )
+    assert (
+        get_model_params_and_category(model_name="some-vendor/model-13.5b-instruct", call_type=CallTypes.completion)
+        == "together-ai-8.1b-21b"
+    )
+
+
 @pytest.mark.parametrize("provider", ["gemini"])
 def test_gemini_completion_cost(provider):
     """
