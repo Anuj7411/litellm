@@ -297,3 +297,38 @@ class TestPerplexityCostCalculator:
 
         assert prompt_cost == 0.0
         assert completion_cost == 0.00501
+
+    def test_cached_prompt_tokens_bill_at_the_cache_read_rate_not_the_input_rate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """
+        Regression: Perplexity models publish a discounted cache_read_input_token_cost
+        (e.g. perplexity/openai/gpt-5.2), but the manual fallback calculator (used whenever
+        Perplexity doesn't return usage.cost.total_cost) billed every prompt token at the
+        full input_cost_per_token rate, ignoring cached_tokens entirely. This overcharged
+        for any cache hit.
+        """
+        model: Final = "perplexity/cache-pricing-fixture"
+        monkeypatch.setitem(
+            litellm.model_cost,
+            model,
+            {
+                "litellm_provider": "perplexity",
+                "mode": "chat",
+                "input_cost_per_token": 2e-06,
+                "output_cost_per_token": 8e-06,
+                "cache_read_input_token_cost": 5e-07,
+            },
+        )
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=50,
+            total_tokens=1050,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=600),
+        )
+
+        prompt_cost, completion_cost = perplexity_cost_per_token(model=model, usage=usage)
+
+        # 400 non-cached tokens at the full rate + 600 cached tokens at the cache-read rate.
+        assert math.isclose(prompt_cost, 400 * 2e-06 + 600 * 5e-07, rel_tol=1e-10)
+        assert math.isclose(completion_cost, 50 * 8e-06, rel_tol=1e-10)

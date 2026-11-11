@@ -58,16 +58,25 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
         TokenRates(
             input_rate=_safe_float_cast(model_info.get("input_cost_per_token")),
             output_rate=_safe_float_cast(model_info.get("output_cost_per_token")),
-            cache_read_rate=0.0,
+            cache_read_rate=_safe_float_cast(model_info.get("cache_read_input_token_cost")),
             cache_creation_rate=0.0,
             reasoning_rate=None,
         ),
     )
     input_cost_per_token: Final = rates.input_rate
     output_cost_per_token: Final = rates.output_rate
+    cache_read_cost_per_token: Final = rates.cache_read_rate
 
     ## CALCULATE INPUT COST
-    prompt_cost: float = (usage.prompt_tokens or 0) * input_cost_per_token
+    ## Perplexity is OpenAI-compatible: prompt_tokens already includes cached_tokens, so the
+    ## cached portion is billed at cache_read_input_token_cost instead of the full input rate.
+    cached_tokens: Final = _safe_float_cast(
+        getattr(usage.prompt_tokens_details, "cached_tokens", 0)
+        if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details
+        else 0
+    )
+    billable_prompt_tokens: Final = max(0.0, (usage.prompt_tokens or 0) - cached_tokens)
+    prompt_cost: float = billable_prompt_tokens * input_cost_per_token + cached_tokens * cache_read_cost_per_token
 
     ## ADD CITATION TOKENS COST (if present)
     citation_tokens: Final = getattr(usage, "citation_tokens", 0) or 0
