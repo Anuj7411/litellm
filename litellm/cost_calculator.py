@@ -2319,7 +2319,24 @@ def batch_cost_calculator(
     total_prompt_cost = 0.0
     total_completion_cost = 0.0
     if input_cost_per_token_batches:
-        total_prompt_cost = usage.prompt_tokens * input_cost_per_token_batches
+        # Subtract cached tokens from prompt_tokens before calculating cost
+        # Fixes issue where cached tokens are being charged at the full batch rate
+        total_prompt_cost = (
+            get_billable_input_tokens(usage) * input_cost_per_token_batches
+        )
+
+        # Add cache read cost if applicable. There is no dedicated batch cache-read
+        # rate, so approximate it the same way the non-batch-rate branch below does:
+        # half of the standard (non-batch) cache-read rate.
+        details = _parse_prompt_tokens_details(usage)
+        cache_read_tokens = details["cache_hit_tokens"]
+        cache_read_cost_key = _get_service_tier_cost_key(
+            "cache_read_input_token_cost", None
+        )
+        total_prompt_cost += (
+            calculate_cost_component(model_info, cache_read_cost_key, cache_read_tokens)
+            / 2
+        )
     elif input_cost_per_token:
         # Subtract cached tokens from prompt_tokens before calculating cost
         # Fixes issue where cached tokens are being charged again

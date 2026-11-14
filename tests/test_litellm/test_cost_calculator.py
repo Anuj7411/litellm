@@ -969,6 +969,48 @@ def test_cost_calculator_with_cache_creation():
     print(result)
 
 
+def test_batch_cost_calculator_discounts_cached_tokens_with_dedicated_batch_rate():
+    """
+    Regression test: when a model has a dedicated batch input rate
+    (input_cost_per_token_batches), batch_cost_calculator must still bill
+    cached prompt tokens at the cheaper cache-read rate instead of the full
+    batch input rate.
+    """
+    from litellm.cost_calculator import batch_cost_calculator
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    model = "azure/gpt-4.1"
+    model_info = litellm.get_model_info(model=model)
+    assert model_info.get("input_cost_per_token_batches")
+    assert model_info.get("cache_read_input_token_cost")
+
+    prompt_tokens = 100_000
+    cached_tokens = 90_000
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=0,
+        total_tokens=prompt_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+    )
+
+    total_prompt_cost, _ = batch_cost_calculator(
+        usage=usage, model=model, model_info=model_info
+    )
+
+    billable_tokens = prompt_tokens - cached_tokens
+    expected_cost = (
+        billable_tokens * model_info["input_cost_per_token_batches"]
+        + cached_tokens * model_info["cache_read_input_token_cost"] / 2
+    )
+    assert total_prompt_cost == pytest.approx(expected_cost)
+
+    # Before the fix, every prompt token (including cached ones) was billed
+    # at the full batch rate, which must cost strictly more than the
+    # correctly discounted total above.
+    naive_full_rate_cost = prompt_tokens * model_info["input_cost_per_token_batches"]
+    assert total_prompt_cost < naive_full_rate_cost
+
+
 def test_bedrock_cost_calculator_comparison_with_without_cache():
     """Test that Bedrock caching reduces costs compared to non-cached requests"""
     from litellm import completion_cost
