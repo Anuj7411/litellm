@@ -677,6 +677,54 @@ def test_responses_web_search_and_image_generation_costs_are_additive(local_mode
     assert combined == pytest.approx(web_search_only + image_only)
 
 
+def test_responses_web_search_and_file_search_costs_are_additive(local_model_cost_map):
+    """
+    A single Responses API call can enable both web_search and file_search, and the
+    model can invoke both in one response. The file_search charge must still be billed
+    when a web_search_call is also present, not silently dropped because web search
+    was matched first.
+    """
+    from litellm.constants import OPENAI_FILE_SEARCH_COST_PER_1K_CALLS
+
+    model = "gpt-4o-search-preview"
+    web_search_item = {"type": "web_search_call", "id": "ws_1", "status": "completed"}
+    file_search_item = {
+        "type": "file_search_call",
+        "id": "fs_1",
+        "status": "completed",
+        "queries": ["q"],
+        "results": None,
+    }
+    standard_built_in_tools_params = StandardBuiltInToolsParams(file_search=FileSearchTool(type="file_search"))
+
+    combined = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        response_object=_openai_responses_response(model, [web_search_item, file_search_item]),
+        usage=None,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=standard_built_in_tools_params,
+    )
+    web_search_only = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        response_object=_openai_responses_response(model, [web_search_item]),
+        usage=None,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=standard_built_in_tools_params,
+    )
+    file_search_only = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        response_object=_openai_responses_response(model, [file_search_item]),
+        usage=None,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=standard_built_in_tools_params,
+    )
+
+    assert file_search_only == pytest.approx(OPENAI_FILE_SEARCH_COST_PER_1K_CALLS)
+    # Pinned to the actual bug: the combined response used to short-circuit on the
+    # web_search_call and drop the file_search charge entirely (combined == web_search_only).
+    assert combined == pytest.approx(web_search_only + file_search_only)
+
+
 def test_responses_incomplete_image_generation_call_not_billed(local_model_cost_map):
     """A failed image_generation_call produced no billable image, so it must cost $0."""
     response = _openai_responses_response(

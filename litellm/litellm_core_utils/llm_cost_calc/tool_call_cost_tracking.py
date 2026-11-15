@@ -109,43 +109,47 @@ class StandardBuiltInToolCostTracking:
             custom_llm_provider=custom_llm_provider,
         )
 
-        # Handle web search
-        if StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
-            response_object=response_object, usage=usage
-        ):
-            return (
-                google_maps_grounding_cost
-                + image_generation_cost
-                + StandardBuiltInToolCostTracking._handle_web_search_cost(
-                    model=model,
-                    custom_llm_provider=custom_llm_provider,
-                    usage=usage,
-                    standard_built_in_tools_params=standard_built_in_tools_params,
-                    response_object=response_object,
-                )
+        # A single response can invoke more than one built-in tool (e.g. the Responses
+        # API supports enabling web_search and file_search together), so every tool the
+        # response actually used must be billed, not just the first one matched.
+        web_search_cost: Final = (
+            StandardBuiltInToolCostTracking._handle_web_search_cost(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                usage=usage,
+                standard_built_in_tools_params=standard_built_in_tools_params,
+                response_object=response_object,
             )
-
-        # Handle file search
-        if StandardBuiltInToolCostTracking.response_object_includes_file_search_call(response_object=response_object):
-            return (
-                google_maps_grounding_cost
-                + image_generation_cost
-                + StandardBuiltInToolCostTracking._handle_file_search_cost(
-                    model=model,
-                    custom_llm_provider=custom_llm_provider,
-                    standard_built_in_tools_params=standard_built_in_tools_params,
-                )
+            if StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
+                response_object=response_object, usage=usage
             )
+            else 0.0
+        )
 
-        # Handle Azure assistant features
-        return (
-            google_maps_grounding_cost
-            + image_generation_cost
-            + StandardBuiltInToolCostTracking._handle_azure_assistant_costs(
+        file_search_cost: Final = (
+            StandardBuiltInToolCostTracking._handle_file_search_cost(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 standard_built_in_tools_params=standard_built_in_tools_params,
             )
+            if StandardBuiltInToolCostTracking.response_object_includes_file_search_call(
+                response_object=response_object
+            )
+            else 0.0
+        )
+
+        azure_assistant_cost: Final = StandardBuiltInToolCostTracking._handle_azure_assistant_costs(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            standard_built_in_tools_params=standard_built_in_tools_params,
+        )
+
+        return (
+            google_maps_grounding_cost
+            + image_generation_cost
+            + web_search_cost
+            + file_search_cost
+            + azure_assistant_cost
         )
 
     @staticmethod
