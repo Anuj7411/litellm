@@ -11481,6 +11481,41 @@ def test_bedrock_converse_cost_uses_invoked_profile(
     assert response.model == model
 
 
+def test_bedrock_claude_platform_cost_applies_cross_region_geo_multiplier(_local_model_cost_map: None) -> None:
+    """
+    Regression: when the invoked model id resolves to a priced claude_platform row
+    (the same resolution ``test_bedrock_converse_cost_uses_invoked_profile`` above
+    exercises for the openai/converse route), ``cost_per_token``'s bedrock branch must
+    still apply Bedrock's cross-region surcharge (``provider_specific_entry``, keyed off
+    ``usage.inference_geo``) the same way ``bedrock_cost_per_token`` does when no profile
+    is resolved. Before the fix, resolving the profile short-circuited straight to
+    ``generic_cost_per_token`` and dropped the surcharge entirely, undercharging
+    US-region cross-region Claude-on-Bedrock traffic by exactly the surcharge (10% here).
+    """
+    model: Final = "bedrock/claude_platform/claude-opus-5-5"
+    prices: Final = litellm.get_model_info("claude_platform/claude-opus-5-5", custom_llm_provider="bedrock")
+    assert prices.get("provider_specific_entry") == {"us": 1.1}
+
+    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    usage.inference_geo = "us"
+    response: Final = ModelResponse(model=model, usage=usage)
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="bedrock",
+        optional_params={"model_id": "claude_platform/claude-opus-5-5"},
+    )
+
+    expected: Final = (
+        1000 * prices["input_cost_per_token"] * 1.1 + 500 * prices["output_cost_per_token"] * 1.1
+    )
+    assert cost == pytest.approx(expected)
+    # Pinned to the actual bug: without the geo multiplier this comes in at
+    # expected / 1.1 (undercharged by exactly the regional surcharge).
+    assert cost != pytest.approx(expected / 1.1)
+
+
 @pytest.mark.parametrize("custom_pricing", (False, True))
 def test_bedrock_converse_profile_preserves_explicit_base_and_custom_pricing(
     _local_model_cost_map: None, custom_pricing: bool

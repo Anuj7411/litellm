@@ -56,6 +56,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     get_cost_per_unit,
     get_fedramp_uplift_multiplier,
     get_modality_token_cost_key,
+    get_provider_specific_geo_multiplier,
     get_regional_uplift_multiplier,
     get_service_tier_cost_key,
     get_token_type_cost_breakdown,
@@ -831,13 +832,20 @@ def cost_per_token(
     elif custom_llm_provider == "bedrock":
         resolved_bedrock_info: Final = bedrock_model_info or _bedrock_pricing_info(model, None, "bedrock", False)
         if resolved_bedrock_info is not None:
-            return generic_cost_per_token(
+            bedrock_prompt_cost, bedrock_completion_cost = generic_cost_per_token(
                 model=model,
                 usage=usage_block,
                 custom_llm_provider="bedrock",
                 service_tier=service_tier,
                 model_info=resolved_bedrock_info,
             )
+            # generic_cost_per_token has no notion of Bedrock's per-region cross-inference-profile
+            # surcharge (e.g. provider_specific_entry: {"us": 1.1}); bedrock_cost_per_token below
+            # applies it, so this shortcut must too or resolved cross-region pricing undercharges.
+            geo_multiplier: Final = get_provider_specific_geo_multiplier(
+                model_info=resolved_bedrock_info, usage=usage_block
+            )
+            return bedrock_prompt_cost * geo_multiplier, bedrock_completion_cost * geo_multiplier
         return bedrock_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
     elif custom_llm_provider == "openai":
         return openai_cost_per_token(
