@@ -91,6 +91,100 @@ class TestGPTImageCostCalculator:
 
         assert cost == pytest.approx(0.10)
 
+    def test_gpt_image_1_applies_openai_data_residency_uplift(self) -> None:
+        """
+        Regression test: ``completion_cost()`` forwards ``data_residency`` to every
+        other call-type branch, but the image-generation branch never forwarded it
+        to ``route_image_generation_cost_calculator()``, so a deployment's
+        ``regional_processing_uplift_multiplier_eu`` was silently dropped for
+        gpt-image spend even though the same multiplier is honored for chat/responses
+        calls on the same regionalized deployment.
+        """
+        from litellm.llms.openai.image_generation.cost_calculator import cost_calculator
+
+        image_response = ImageResponse(
+            created=1234567890,
+            data=[ImageObject(b64_json="image")],
+            usage=ImageUsage(
+                input_tokens=100,
+                input_tokens_details=ImageUsageInputTokensDetails(text_tokens=100, image_tokens=0),
+                output_tokens=200,
+                total_tokens=300,
+            ),
+        )
+        model_info: Final = {
+            "input_cost_per_token": 5e-06,
+            "output_cost_per_image_token": 4e-05,
+            "regional_processing_uplift_multiplier_eu": 1.1,
+        }
+
+        base_cost = cost_calculator(
+            model="gpt-image-1",
+            image_response=image_response,
+            custom_llm_provider="openai",
+            model_info=model_info,
+        )
+        eu_cost = cost_calculator(
+            model="gpt-image-1",
+            image_response=image_response,
+            custom_llm_provider="openai",
+            model_info=model_info,
+            data_residency="eu",
+        )
+
+        assert base_cost == pytest.approx(100 * 5e-06 + 200 * 4e-05)
+        assert eu_cost == pytest.approx(base_cost * 1.1)
+
+    def test_completion_cost_forwards_data_residency_for_image_generation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """
+        Same regression as above, exercised through the public ``litellm.completion_cost()``
+        entrypoint (the actual code path hit at request time) rather than calling the
+        provider calculator directly.
+        """
+        from litellm.litellm_core_utils.model_cost_table import publish
+
+        model: Final = "lit-gpt-image-eu-residency-test"
+        monkeypatch.setitem(
+            litellm.model_cost,
+            model,
+            {
+                "litellm_provider": "openai",
+                "mode": "image_generation",
+                "input_cost_per_token": 5e-06,
+                "output_cost_per_image_token": 4e-05,
+                "regional_processing_uplift_multiplier_eu": 1.1,
+            },
+        )
+        publish(litellm.model_cost)
+
+        image_response = ImageResponse(
+            created=1234567890,
+            data=[ImageObject(b64_json="image")],
+            usage=ImageUsage(
+                input_tokens=100,
+                input_tokens_details=ImageUsageInputTokensDetails(text_tokens=100, image_tokens=0),
+                output_tokens=200,
+                total_tokens=300,
+            ),
+        )
+
+        no_uplift_cost = litellm.completion_cost(
+            model=f"openai/{model}",
+            completion_response=image_response,
+            call_type="image_generation",
+        )
+        eu_cost = litellm.completion_cost(
+            model=f"openai/{model}",
+            completion_response=image_response,
+            call_type="image_generation",
+            data_residency="eu",
+        )
+
+        assert no_uplift_cost > 0
+        assert eu_cost == pytest.approx(no_uplift_cost * 1.1)
+
 
 class TestGPTImageCostRouting:
     """Test that gpt-image models are properly routed to the token-based calculator"""

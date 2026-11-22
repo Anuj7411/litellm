@@ -21,9 +21,10 @@ def cost_calculator(
     image_response: ImageResponse,
     custom_llm_provider: str | None = None,
     model_info: ModelInfo | None = None,
+    data_residency: str | None = None,
 ) -> float:
     """Calculate cost for OpenAI gpt-image models (token-based pricing)."""
-    rendering_cost: Final = _rendering_cost(model, image_response, custom_llm_provider, model_info)
+    rendering_cost: Final = _rendering_cost(model, image_response, custom_llm_provider, model_info, data_residency)
     svg_usage: Final = image_response.svg_usage
     if svg_usage is None:
         return rendering_cost
@@ -36,6 +37,7 @@ def cost_calculator(
                 total_tokens=svg_usage.total_tokens,
             ),
             custom_llm_provider=custom_llm_provider or "openai",
+            data_residency=data_residency,
         )
     except Exception as exc:  # noqa: BLE001  # get_model_info can raise a bare Exception for missing pricing
         verbose_logger.debug("Unable to price SVG authoring usage for model=%s: %s", svg_usage.model, exc)
@@ -48,6 +50,7 @@ def _rendering_cost(
     image_response: ImageResponse,
     custom_llm_provider: str | None,
     model_info: ModelInfo | None,
+    data_residency: str | None = None,
 ) -> float:
     provider: Final = custom_llm_provider or "openai"
     price_table: Final = (
@@ -64,7 +67,11 @@ def _rendering_cost(
     # A chat Usage with an explicit output breakdown: cost via generic_cost_per_token.
     if isinstance(usage, Usage) and usage.completion_tokens_details is not None:
         prompt_cost, completion_cost = generic_cost_per_token(
-            model=model, usage=usage, custom_llm_provider=provider, model_info=price_table
+            model=model,
+            usage=usage,
+            custom_llm_provider=provider,
+            model_info=price_table,
+            data_residency=data_residency,
         )
         return prompt_cost + completion_cost
 
@@ -74,7 +81,11 @@ def _rendering_cost(
     # does not itemize output and splitting text/image when it does.
     if getattr(usage, "input_tokens", None) is not None:
         token_based_cost: Final = calculate_image_response_cost_from_usage(
-            model=model, image_response=image_response, custom_llm_provider=provider, model_info=price_table
+            model=model,
+            image_response=image_response,
+            custom_llm_provider=provider,
+            model_info=price_table,
+            data_residency=data_residency,
         )
         if token_based_cost is not None:
             return token_based_cost
@@ -83,7 +94,11 @@ def _rendering_cost(
     # cost via generic_cost_per_token (text rate) instead of returning 0.0.
     if isinstance(usage, Usage):
         prompt_cost, completion_cost = generic_cost_per_token(
-            model=model, usage=usage, custom_llm_provider=provider, model_info=price_table
+            model=model,
+            usage=usage,
+            custom_llm_provider=provider,
+            model_info=price_table,
+            data_residency=data_residency,
         )
         return prompt_cost + completion_cost
 
