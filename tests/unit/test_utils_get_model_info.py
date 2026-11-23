@@ -619,3 +619,20 @@ def test_get_model_info_huggingface_models(monkeypatch):
         providers=["huggingface"],
         **info,
     )
+
+
+def test_get_model_info_huggingface_registered_pricing_not_forced_to_zero():
+    """
+    A huggingface deployment with no public price list (e.g. a self-hosted TEI
+    reranker) defaults to free, but a deployment that registers its own pricing
+    must still be billed from it rather than always costing 0.
+    """
+    model: Final = "my-tei-reranker"
+    litellm.register_model({model: {"input_cost_per_query": 0.001, "litellm_provider": "huggingface"}})
+
+    registered_info: Final = litellm.get_model_info(model, custom_llm_provider="huggingface")
+    assert registered_info["input_cost_per_query"] == 0.001
+
+    unregistered_info: Final = litellm.get_model_info("some-other-tei-model", custom_llm_provider="huggingface")
+    assert unregistered_info["input_cost_per_token"] == 0
+    assert unregistered_info["output_cost_per_token"] == 0
