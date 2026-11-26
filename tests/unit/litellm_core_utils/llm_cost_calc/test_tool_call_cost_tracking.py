@@ -71,6 +71,18 @@ def test_file_search_cost():
     assert cost == 0.0025  # $2.50/1000 calls = 0.0025 per call
 
 
+def test_file_search_cost_with_custom_model_info():
+    # model_info["file_search_cost_per_1k_calls"] is priced per 1k calls, same
+    # unit as OPENAI_FILE_SEARCH_COST_PER_1K_CALLS, so a single call must be
+    # billed at 1/1000th of that value, not the raw per-1k-calls price.
+    file_search = FileSearchTool(type="file_search")
+    cost = StandardBuiltInToolCostTracking.get_cost_for_file_search(
+        file_search=file_search,
+        model_info={"file_search_cost_per_1k_calls": 2.5},
+    )
+    assert cost == 0.0025
+
+
 # Test edge cases
 def test_none_inputs():
     # Test with None inputs

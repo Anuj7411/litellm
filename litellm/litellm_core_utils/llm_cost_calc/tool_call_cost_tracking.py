@@ -850,7 +850,7 @@ class StandardBuiltInToolCostTracking:
             if storage_gb and days:
                 return storage_gb * days * model_info["file_search_cost_per_gb_per_day"]
         elif model_info and "file_search_cost_per_1k_calls" in model_info:
-            return model_info["file_search_cost_per_1k_calls"]
+            return model_info["file_search_cost_per_1k_calls"] / 1000
 
         # Azure has storage-based pricing for file search
         if provider == "azure":
