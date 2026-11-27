@@ -2414,6 +2414,53 @@ def test_completion_cost_params_gemini_3():
     )
 
 
+def test_vertex_ai_cost_per_character_above_128k_bills_by_characters():
+    """
+    Regression test for cost_per_character(): once a completion crosses the
+    128k-token-equivalent threshold, the >128k branch must multiply the
+    per-character rate by the character count, not by usage.completion_tokens.
+    """
+    import math
+
+    from litellm.llms.vertex_ai.cost_calculator import cost_per_character
+    from litellm.utils import Usage
+
+    model = "vertex_ai/test-char-pricing-above-128k"
+    litellm.register_model(
+        {
+            model: {
+                "input_cost_per_character": 0.0000025,
+                "input_cost_per_character_above_128k_tokens": 0.000005,
+                "output_cost_per_character": 0.0000075,
+                "output_cost_per_character_above_128k_tokens": 0.000015,
+                "litellm_provider": "vertex_ai",
+                "mode": "chat",
+            }
+        }
+    )
+
+    completion_characters = 600_000  # 600k chars => 2.4M "tokens" (>128k threshold)
+    usage = Usage(
+        prompt_tokens=10,
+        completion_tokens=200_000,  # deliberately != completion_characters
+        total_tokens=200_010,
+    )
+
+    _, completion_cost = cost_per_character(
+        model=model,
+        custom_llm_provider="vertex_ai",
+        usage=usage,
+        prompt_characters=10,
+        completion_characters=completion_characters,
+    )
+
+    expected_completion_cost = completion_characters * 0.000015
+    assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-9), (
+        f"expected cost calculated off of completion_characters ({expected_completion_cost}), "
+        f"got {completion_cost}"
+    )
+
+
 @pytest.mark.asyncio
 # @pytest.mark.flaky(retries=3, delay=1)
 @pytest.mark.parametrize("stream", [False])  # True,
