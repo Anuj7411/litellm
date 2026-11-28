@@ -10600,6 +10600,38 @@ def test_completion_cost_params_gemini_3():
     )
 
 
+def test_cost_per_character_above_128k_threshold_uses_token_equivalent():
+    """
+    Regression test: cost_per_character's "above 128k [tokens]" check must compare the
+    token-equivalent of the character count (characters / 4) against the 128k threshold,
+    not the character count scaled the wrong way (characters * 4). Vertex AI character-priced
+    models (1 token ~= 4 characters) only cross into "above 128k tokens" pricing past ~512k
+    characters; before the fix, `is_above_128k(tokens=characters * 4)` tripped that switch at
+    just ~32k characters, and because models like "medlm-large" define no above-128k character
+    rate, that early misfire fell through to an unset token rate and silently billed $0.
+    """
+    from litellm.llms.vertex_ai.cost_calculator import cost_per_character
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    usage = Usage(prompt_tokens=12_500, completion_tokens=250, total_tokens=12_750)
+    model_info = litellm.get_model_info(model="medlm-large", custom_llm_provider="vertex_ai")
+    input_cost_per_character = model_info["input_cost_per_character"]
+    assert input_cost_per_character is not None
+
+    # 50,000 characters (~12,500 tokens) is well under the real 128k-token threshold
+    # (~512,000 characters) and must still be billed at the flat per-character rate.
+    prompt_cost, _ = cost_per_character(
+        model="medlm-large",
+        custom_llm_provider="vertex_ai",
+        usage=usage,
+        prompt_characters=50_000.0,
+        completion_characters=1_000.0,
+    )
+    assert prompt_cost == pytest.approx(50_000.0 * input_cost_per_character)
+
+
 @pytest.mark.asyncio
 # @pytest.mark.flaky(retries=3, delay=1)
 @pytest.mark.parametrize("stream", [False])  # True,
